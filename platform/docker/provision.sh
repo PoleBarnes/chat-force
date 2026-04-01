@@ -192,7 +192,39 @@ else
   fi
 fi
 
-# ── Step 5: Summary ──────────────────────────────────────────────────────
+# ── Step 5: OpenAI Codex OAuth setup ──────────────────────────────────────
+
+step "OpenAI Codex OAuth setup (inside container)"
+
+if [ -z "$CONTAINER_ID" ]; then
+  CONTAINER_ID=$(docker ps -qf "label=devcontainer.local_folder=$WORKSPACE")
+fi
+
+if [ -n "$CONTAINER_ID" ]; then
+  # Check if Codex OAuth is already configured
+  if docker exec "$CONTAINER_ID" test -f /home/node/.openclaw/agents/main/agent/auth-profiles.json && \
+     docker exec "$CONTAINER_ID" grep -q '"openai-codex"' /home/node/.openclaw/agents/main/agent/auth-profiles.json 2>/dev/null; then
+    ok "OpenAI Codex OAuth already configured"
+  elif [ -t 0 ]; then
+    info "Setting up OpenAI Codex OAuth (uses your ChatGPT subscription)."
+    info "You will be prompted to authorize via your browser."
+    info ""
+    if docker exec -it "$CONTAINER_ID" openclaw onboard --auth-choice openai-codex; then
+      ok "OpenAI Codex OAuth configured"
+    else
+      warn "Codex OAuth setup was not completed. You can finish it later:"
+      warn "  docker exec -it $CONTAINER_ID openclaw onboard --auth-choice openai-codex"
+    fi
+  else
+    warn "No TTY available — cannot run interactive Codex OAuth setup."
+    warn "Run this in your terminal:"
+    warn "  docker exec -it $CONTAINER_ID openclaw onboard --auth-choice openai-codex"
+  fi
+else
+  warn "Container not found. Skipping Codex OAuth setup."
+fi
+
+# ── Step 6: Summary ──────────────────────────────────────────────────────
 
 step "Provisioning complete"
 

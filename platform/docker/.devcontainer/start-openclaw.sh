@@ -34,7 +34,7 @@ echo "Doppler project: chat-force / dev"
 echo ""
 echo "Verifying required secrets..."
 
-REQUIRED_SECRETS="SLACK_BOT_TOKEN SLACK_APP_TOKEN ANTHROPIC_AUTH_TOKEN"
+REQUIRED_SECRETS="SLACK_BOT_TOKEN SLACK_APP_TOKEN ANTHROPIC_AUTH_TOKEN GEMINI_API_KEY"
 MISSING=""
 
 for secret in $REQUIRED_SECRETS; do
