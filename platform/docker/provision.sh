@@ -145,9 +145,7 @@ step "Starting devcontainer"
 
 info "This may take several minutes on first run (building image)..."
 
-devcontainer up --workspace-folder "$WORKSPACE"
-
-if [ $? -eq 0 ]; then
+if devcontainer up --workspace-folder "$WORKSPACE"; then
   ok "Devcontainer is running"
 else
   error "Failed to start devcontainer. Check the output above."
@@ -170,9 +168,7 @@ else
     # Interactive login -- needs TTY for browser auth flow
     info "You will be prompted to log in to Doppler via your browser."
     info ""
-    docker exec -it "$CONTAINER_ID" doppler login --yes
-
-    if [ $? -eq 0 ]; then
+    if docker exec -it "$CONTAINER_ID" doppler login --yes; then
       ok "Doppler login successful"
     else
       warn "Doppler login was not completed. You can finish it later:"
@@ -186,10 +182,8 @@ else
 
   # Link the project non-interactively (only if authenticated)
   if docker exec "$CONTAINER_ID" doppler me &>/dev/null; then
-    docker exec "$CONTAINER_ID" \
-      doppler setup --project chat-force --config dev --no-interactive
-
-    if [ $? -eq 0 ]; then
+    if docker exec "$CONTAINER_ID" \
+      doppler setup --project chat-force --config dev --no-interactive; then
       ok "Doppler project linked: chat-force / dev"
     else
       warn "Doppler project setup failed. Run inside the container:"
