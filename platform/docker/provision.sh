@@ -301,7 +301,7 @@ if [ -n "$CONTAINER_ID" ]; then
     info "Setting up OpenAI Codex OAuth (uses your ChatGPT subscription)."
     info "You will be prompted to authorize via your browser."
     info ""
-    if docker exec -it "$CONTAINER_ID" openclaw onboard --auth-choice openai-codex; then
+    if docker exec -it "$CONTAINER_ID" openclaw onboard --non-interactive --accept-risk --auth-choice openai-codex; then
       ok "OpenAI Codex OAuth configured"
     else
       warn "Codex OAuth setup was not completed. You can finish it later:"
