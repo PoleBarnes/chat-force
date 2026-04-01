@@ -28,7 +28,7 @@
 
   "gateway": {
     "port": 3001,
-    "bind": "0.0.0.0",
+    "bind": "lan",
     "auth": {
       "token": "${OPENCLAW_GATEWAY_TOKEN}"
     }
