@@ -1,0 +1,35 @@
+# Workspace Configuration Template
+# Copy this directory to /workspaces/{client-name}/ for each new client
+
+workspace:
+  name: ""           # Client name
+  tier: "standard"   # starter | standard | enterprise
+
+  slack:
+    workspace_id: ""
+    channels:
+      marketing: ""
+      admin: ""
+      briefings: ""
+      approvals: ""
+
+  google_chat:
+    enabled: false
+
+  heartbeat:
+    enabled: true
+    interval_hours: 2
+    business_hours_only: true
+    timezone: "America/New_York"
+
+  morning_briefing:
+    enabled: true
+    trigger: "presence"  # presence | checkin | both
+
+  sops:
+    enabled: []
+    # List of enabled SOP names from this workspace's /sops/ directory
+
+  platform_skills:
+    opted_in: []
+    # List of platform-wide skills this workspace has opted into

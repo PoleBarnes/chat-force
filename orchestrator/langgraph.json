@@ -1,0 +1,9 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "main": "./graphs/main.py:graph",
+    "sop_runner": "./graphs/sop_runner.py:graph",
+    "mechanic_b": "./graphs/mechanic_b.py:graph"
+  },
+  "env": ".env"
+}

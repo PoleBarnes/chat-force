@@ -1,0 +1,53 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/workspace",
+      "model": {
+        "primary": "anthropic/claude-opus-4-6"
+      }
+    }
+  },
+
+  "channels": {
+    "slack": {
+      "enabled": true,
+      "token": "${SLACK_BOT_TOKEN}",
+      "appToken": "${SLACK_APP_TOKEN}",
+      "socketMode": true,
+      "dmPolicy": "allowlist",
+      "allowFrom": [],
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      },
+      "streaming": "off",
+      "historyLimit": 20
+    }
+  },
+
+  "gateway": {
+    "port": 3001,
+    "bind": "0.0.0.0",
+    "auth": {
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    }
+  },
+
+  "browser": {
+    "enabled": true,
+    "headless": true,
+    "noSandbox": true
+  },
+
+  "tools": {
+    "profile": "full",
+    "exec": {
+      "security": "full"
+    }
+  },
+
+  "logging": {
+    "level": "info"
+  }
+}

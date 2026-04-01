@@ -1,0 +1,46 @@
+# Digital Workforce Platform — Universal Agent Configuration
+# This is the Platform Memory (Tier 1) — shared across all workspaces
+# Updated by Travis only. New capabilities deploy OFF by default.
+
+platform:
+  name: "Digital Workforce Platform"
+  version: "0.1.0"
+
+models:
+  primary:
+    complex: "claude-opus-4-6"
+    routine: "claude-sonnet-4-6"
+  temperature:
+    creative: 0.7
+    planning: 0.0
+    mechanic: 0.0
+    routine: 0.0
+
+routing:
+  # OpenClaw handles directly: simple questions, research, exploration, brainstorming, status checks
+  # Dispatch to LangGraph: multi-step tasks, SOP-matching, approval-gated, multi-agent, projects
+  dispatch_keywords:
+    - "campaign"
+    - "deploy"
+    - "publish"
+    - "launch"
+    - "build"
+    - "create landing page"
+    - "run sop"
+
+limits:
+  per_task_tokens: 100000
+  per_task_timeout_minutes: 30
+  daily_cost_limit_usd: 50.0
+
+circuit_breakers:
+  token_rate_multiplier: 3.0
+  consecutive_error_limit: 3
+  daily_deploy_limit: 5
+
+skills: []
+  # Shared skills are registered here and available to all workspaces (opt-in)
+  # Example:
+  # - name: "ad-campaign-builder"
+  #   enabled_by_default: false
+  #   description: "Creates and deploys ad campaigns to Meta Ads"

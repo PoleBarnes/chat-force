@@ -1,0 +1,24 @@
+# Environment variables
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+
+# Node.js
+node_modules/
+.next/
+
+# macOS
+.DS_Store
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Secrets and credentials
+secrets/
+*.key
+*.pem
+credentials*.json

@@ -1,0 +1,14 @@
+# Tool Definitions and Configurations
+# Each tool specifies its capabilities, required secrets, and access patterns
+
+tools: []
+  # Tools are registered as they are built
+  # Example:
+  # - name: "meta-ads"
+  #   type: api
+  #   description: "Create and manage Meta Ads campaigns"
+  #   secret_refs:
+  #     - "${secrets.META_ADS_KEY}"
+  #   permissions:
+  #     - "ads:read"
+  #     - "ads:write"

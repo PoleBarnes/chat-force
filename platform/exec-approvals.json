@@ -1,0 +1,132 @@
+{
+  "_comment": "Command execution allowlist for OpenClaw. This file restricts which shell commands the agent is permitted to run. Only commands listed under 'allowed' will be executed. Any command matching a 'blocked' pattern will be rejected outright, even if it partially matches an allowed entry. Review and update this list carefully — overly permissive rules can expose the host to unintended side effects.",
+
+  "allowed": [
+    {
+      "command": "ls",
+      "description": "List directory contents",
+      "flags_permitted": ["-l", "-a", "-la", "-lh", "-alh", "-R", "-1"]
+    },
+    {
+      "command": "cat",
+      "description": "Print file contents to stdout",
+      "flags_permitted": ["-n", "-b"]
+    },
+    {
+      "command": "head",
+      "description": "Output the first lines of a file",
+      "flags_permitted": ["-n"]
+    },
+    {
+      "command": "tail",
+      "description": "Output the last lines of a file",
+      "flags_permitted": ["-n", "-f"]
+    },
+    {
+      "command": "grep",
+      "description": "Search file contents with patterns",
+      "flags_permitted": ["-r", "-i", "-n", "-l", "-c", "-v", "-E", "-w", "-H", "--include"]
+    },
+    {
+      "command": "find",
+      "description": "Search for files in a directory hierarchy",
+      "flags_permitted": ["-name", "-type", "-maxdepth", "-mindepth", "-path", "-not", "-size"]
+    },
+    {
+      "command": "echo",
+      "description": "Display a line of text",
+      "flags_permitted": ["-n", "-e"]
+    },
+    {
+      "command": "date",
+      "description": "Display the current date and time",
+      "flags_permitted": ["-u", "--iso-8601", "+%Y-%m-%d", "+%s"]
+    },
+    {
+      "command": "git status",
+      "description": "Show the working tree status",
+      "flags_permitted": ["-s", "--short", "--porcelain"]
+    },
+    {
+      "command": "git log",
+      "description": "Show commit logs",
+      "flags_permitted": ["--oneline", "-n", "--graph", "--pretty", "--since", "--author"]
+    },
+    {
+      "command": "git diff",
+      "description": "Show changes between commits, working tree, etc.",
+      "flags_permitted": ["--stat", "--name-only", "--cached", "--staged"]
+    },
+    {
+      "command": "git show",
+      "description": "Show various types of objects",
+      "flags_permitted": ["--stat", "--name-only", "--pretty"]
+    },
+    {
+      "command": "curl",
+      "description": "Transfer data from a URL (GET requests only)",
+      "flags_permitted": ["-s", "-S", "-L", "-o", "-H", "--header", "-I", "--head", "-f", "--fail"],
+      "constraints": {
+        "method": "GET",
+        "blocked_flags": ["-X POST", "-X PUT", "-X DELETE", "-X PATCH", "-d", "--data", "--upload-file", "-T"]
+      }
+    }
+  ],
+
+  "blocked": [
+    {
+      "pattern": "rm -rf",
+      "reason": "Recursive forced deletion can destroy entire directory trees"
+    },
+    {
+      "pattern": "rm -fr",
+      "reason": "Alias for rm -rf"
+    },
+    {
+      "pattern": "chmod",
+      "reason": "Changing file permissions can compromise security boundaries"
+    },
+    {
+      "pattern": "chown",
+      "reason": "Changing file ownership can compromise security boundaries"
+    },
+    {
+      "pattern": "kill",
+      "reason": "Terminating processes can destabilize the system"
+    },
+    {
+      "pattern": "shutdown",
+      "reason": "System shutdown is never appropriate for an agent"
+    },
+    {
+      "pattern": "reboot",
+      "reason": "System reboot is never appropriate for an agent"
+    },
+    {
+      "pattern": "dd",
+      "reason": "Low-level block device operations can cause irreversible data loss"
+    },
+    {
+      "pattern": "mkfs",
+      "reason": "Creating filesystems destroys existing data on the target device"
+    },
+    {
+      "pattern": "format",
+      "reason": "Formatting devices destroys all data"
+    },
+    {
+      "pattern": "> /dev/sd",
+      "reason": "Direct writes to block devices are destructive"
+    },
+    {
+      "pattern": ":(){ :|:& };:",
+      "reason": "Fork bomb"
+    }
+  ],
+
+  "enforcement": {
+    "default_policy": "deny",
+    "log_blocked_attempts": true,
+    "notify_on_block": true
+  }
+}

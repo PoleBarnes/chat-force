@@ -1,0 +1,36 @@
+# Mechanic Evaluation Criteria
+# Used by both Mechanic A and Mechanic B to score runs
+# Updated by the Meta-Mechanic (with Travis approval)
+
+mechanic_a:
+  criteria:
+    - name: routing_accuracy
+      description: "Did OpenClaw correctly route (handle directly vs. dispatch to LangGraph)?"
+      weight: 0.3
+    - name: response_quality
+      description: "Was the response helpful, clear, and complete?"
+      weight: 0.3
+    - name: context_management
+      description: "Was relevant context maintained across the conversation?"
+      weight: 0.2
+    - name: user_satisfaction
+      description: "Did the user express satisfaction (reactions, explicit feedback)?"
+      weight: 0.2
+
+mechanic_b:
+  criteria:
+    - name: task_completion
+      description: "Did the workflow produce the expected deliverables?"
+      weight: 0.3
+    - name: efficiency
+      description: "Token usage and time relative to task complexity"
+      weight: 0.2
+    - name: sop_adherence
+      description: "Did the workflow follow the defined SOP steps?"
+      weight: 0.2
+    - name: error_rate
+      description: "Number of errors or retries during execution"
+      weight: 0.15
+    - name: cost
+      description: "Total cost relative to task value"
+      weight: 0.15
