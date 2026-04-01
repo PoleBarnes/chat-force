@@ -80,11 +80,25 @@ Reference repo: `PoleBarnes/blacktie-marketing` — has previous BlackTie campai
 
 ### Safety Rules — CRITICAL
 
-- **DO NOT push to any remote.** Pushes may trigger Vercel deployments or other CI.
+- **DO NOT push to main on any repo.** PoleBarnes/blacktie-marketing has Vercel on main.
+- **Work on feature branches.** Commit locally, do not push unless to a feature branch.
 - **DO NOT deploy anything externally.**
-- **Commit locally only.** All work stays on the local machine.
 - **Test via gateway CLI only** — `openclaw agent --agent main --message "..."`, not Slack.
-- When testing Leo with the campaign job, make sure Leo knows it's a test — prefix with "TEST ONLY: Do not deploy or publish."
+- When testing Leo with the campaign job, prefix with "TEST ONLY: Do not deploy or publish."
+- Use `gh` CLI to read PoleBarnes repos (blacktie-marketing, ad-campaign-agent). Read-only.
+- If something goes wrong, stop and contain. Don't try to fix forward on shared resources.
+
+### SOP Evolution Strategy
+
+SOPs start as **OpenClaw skills** (cheap to iterate) → promote to **LangGraph workflows** (rigid, verified) once proven.
+- First implementation: skill with enforced steps
+- After 3+ successful runs: propose promotion to LangGraph
+- LangGraph workflows: defined states, phases, hard checks, approval gates
+- LangGraph runs locally in the same devcontainer — no cloud needed for testing
+
+### LangGraph Setup
+
+Run LangGraph locally inside the existing OpenClaw devcontainer. Same container, separate process. No Docker-in-Docker, no cloud service. Install langgraph + dependencies, run locally for dev/test.
 
 ### Token Budget
 
