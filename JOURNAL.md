@@ -84,6 +84,10 @@
 - 2026-04-01: Slack pairing approved, bot responding in Slack DMs
 - 2026-04-01: GitHub connected to KiloClaw (scoped to PoleBarnes/chat-force repo)
 - 2026-04-01: Linear connected to KiloClaw
+- 2026-04-01: Decided to move from KiloClaw hosted to self-hosted OpenClaw (reasons: full CLI access, OAuth token support for Max subscription, read-only config mounts, cost control)
+- 2026-04-01: Self-hosted OpenClaw running in devcontainer via OrbStack on Mac Mini
+- 2026-04-01: Doppler secrets management configured (SLACK_BOT_TOKEN, SLACK_APP_TOKEN, ANTHROPIC_AUTH_TOKEN, OPENCLAW_GATEWAY_TOKEN)
+- 2026-04-01: OpenClaw 2026.4.1 gateway live, Slack socket mode connected, Claude Opus 4.6
 
 ### Questions for Human
 - [PENDING] See Phase 0 questions batch below
