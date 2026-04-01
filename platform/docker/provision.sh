@@ -64,7 +64,7 @@ if ! docker info &>/dev/null; then
 fi
 
 # Check specifically for OrbStack (optional, just informational)
-if docker info 2>/dev/null | grep -qi orbstack; then
+if docker info 2>&1 | grep -qi orbstack; then
   ok "OrbStack is running"
 else
   warn "Docker is running but OrbStack not detected. Continuing anyway."
