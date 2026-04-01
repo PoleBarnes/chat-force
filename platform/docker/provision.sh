@@ -158,28 +158,44 @@ fi
 
 step "Doppler setup (inside container)"
 
-info "You will be prompted to log in to Doppler via your browser."
-info ""
-
-# Interactive login -- this needs a browser on the host and TTY passthrough
-devcontainer exec --workspace-folder "$WORKSPACE" doppler login
-
-if [ $? -eq 0 ]; then
-  ok "Doppler login successful"
+# Resolve the container ID for docker exec (devcontainer exec doesn't support TTY)
+CONTAINER_ID=$(docker ps -qf "label=devcontainer.local_folder=$WORKSPACE")
+if [ -z "$CONTAINER_ID" ]; then
+  error "Could not find running devcontainer. Skipping Doppler setup."
 else
-  warn "Doppler login was not completed. You can do it later inside the container:"
-  warn "  devcontainer exec --workspace-folder $WORKSPACE doppler login"
-fi
+  # Check if Doppler is already authenticated
+  if docker exec "$CONTAINER_ID" doppler me &>/dev/null; then
+    ok "Doppler already authenticated"
+  elif [ -t 0 ]; then
+    # Interactive login -- needs TTY for browser auth flow
+    info "You will be prompted to log in to Doppler via your browser."
+    info ""
+    docker exec -it "$CONTAINER_ID" doppler login --yes
 
-# Link the project non-interactively
-devcontainer exec --workspace-folder "$WORKSPACE" \
-  doppler setup --project chat-force --config dev --no-interactive
+    if [ $? -eq 0 ]; then
+      ok "Doppler login successful"
+    else
+      warn "Doppler login was not completed. You can finish it later:"
+      warn "  docker exec -it $CONTAINER_ID doppler login --yes"
+    fi
+  else
+    warn "No TTY available — cannot run interactive Doppler login."
+    warn "Run this in your terminal to authenticate:"
+    warn "  docker exec -it $CONTAINER_ID doppler login --yes"
+  fi
 
-if [ $? -eq 0 ]; then
-  ok "Doppler project linked: chat-force / dev"
-else
-  warn "Doppler project setup failed. Run inside the container:"
-  warn "  doppler setup --project chat-force --config dev"
+  # Link the project non-interactively (only if authenticated)
+  if docker exec "$CONTAINER_ID" doppler me &>/dev/null; then
+    docker exec "$CONTAINER_ID" \
+      doppler setup --project chat-force --config dev --no-interactive
+
+    if [ $? -eq 0 ]; then
+      ok "Doppler project linked: chat-force / dev"
+    else
+      warn "Doppler project setup failed. Run inside the container:"
+      warn "  docker exec -it $CONTAINER_ID doppler setup --project chat-force --config dev"
+    fi
+  fi
 fi
 
 # ── Step 5: Summary ──────────────────────────────────────────────────────
