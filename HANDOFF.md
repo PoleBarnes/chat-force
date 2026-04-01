@@ -68,10 +68,28 @@ You are the **orchestrator**. You do NOT write code yourself. You plan, delegate
 - Travis prefers progressive disclosure, visual diagrams, one question at a time
 - Quality over speed — get the architecture right
 
+### Test Job Available
+
+`tests/fixtures/blacktie-april-campaign.md` — a real BlackTie post-frame buildings April ad campaign. Use this to test Leo's marketing capabilities via the gateway CLI. **DO NOT deploy, push, or publish anything.**
+
+`tests/fixtures/ad-campaign-workflow.md` — distilled ad campaign SOP from PoleBarnes/ad-campaign-agent. This is the workflow Leo should follow for campaigns. The full agent implementations (research + generation) are in that repo.
+
+Reference repo: `PoleBarnes/ad-campaign-agent` — has research agent, generation agent, shared principles, templates, and skills. Use `gh api repos/PoleBarnes/ad-campaign-agent/contents/...` to read files.
+
+Reference repo: `PoleBarnes/blacktie-marketing` — has previous BlackTie campaigns for reference.
+
+### Safety Rules — CRITICAL
+
+- **DO NOT push to any remote.** Pushes may trigger Vercel deployments or other CI.
+- **DO NOT deploy anything externally.**
+- **Commit locally only.** All work stays on the local machine.
+- **Test via gateway CLI only** — `openclaw agent --agent main --message "..."`, not Slack.
+- When testing Leo with the campaign job, make sure Leo knows it's a test — prefix with "TEST ONLY: Do not deploy or publish."
+
 ### Token Budget
 
 Travis said burn tokens freely. Use as many agents as needed. Parallelize aggressively. Go deep on quality. This is a major sprint — do as much as you possibly can.
 
 ### When You're Done
 
-Update `JOURNAL.md` with everything completed, decisions made, and what's next. Commit your work.
+Update `JOURNAL.md` with everything completed, decisions made, and what's next. Commit locally (do not push).
