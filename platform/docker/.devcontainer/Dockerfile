@@ -79,8 +79,12 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ── Non-root user: vscode (UID 1000) ──────────────────────────────────────
-RUN groupadd --gid 1000 vscode \
-  && useradd --uid 1000 --gid 1000 --shell /bin/zsh --create-home vscode \
+RUN if ! getent group 1000 >/dev/null; then groupadd --gid 1000 vscode; fi \
+  && if ! id -u 1000 >/dev/null 2>&1; then \
+       useradd --uid 1000 --gid 1000 --shell /bin/zsh --create-home vscode; \
+     else \
+       usermod --login vscode --shell /bin/zsh --home /home/vscode --move-home $(id -nu 1000) 2>/dev/null || true; \
+     fi \
   && echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/vscode \
   && chmod 0440 /etc/sudoers.d/vscode
 
