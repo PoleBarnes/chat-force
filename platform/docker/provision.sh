@@ -5,8 +5,9 @@
 #   1. Checks/installs prerequisites (OrbStack, devcontainer CLI, jq)
 #   2. Creates a workspace directory with .devcontainer files
 #   3. Starts the devcontainer via `devcontainer up`
-#   4. Runs initial Doppler setup inside the container
-#   5. Prints next steps
+#   4. Creates a Doppler service token (one-time, cached across --clean)
+#   5. Runs OpenAI Codex OAuth onboard
+#   6. Prints next steps
 #
 # Safe to re-run (idempotent). All persistent data lives in named Docker
 # volumes, so the workspace directory can be recreated without data loss.
@@ -185,8 +186,8 @@ step "Setting up workspace at $WORKSPACE"
 
 mkdir -p "$WORKSPACE"
 
-# Ensure Doppler config dir exists on host (bind-mounted into container)
-mkdir -p "$HOME/.doppler"
+# Doppler service token cache (persists across --clean provisions)
+DOPPLER_TOKEN_FILE="$WORKSPACE/.doppler-service-token"
 
 # Copy .devcontainer files
 if [ ! -d "$DEVCONTAINER_SRC" ]; then
@@ -213,10 +214,14 @@ fi
 # Initialize a git repo to prevent parent repo detection by tools inside
 if [ ! -d "$WORKSPACE/.git" ]; then
   git -C "$WORKSPACE" init --quiet
-  # Create an initial commit so the repo is valid
+  echo ".doppler-service-token" > "$WORKSPACE/.gitignore"
+  git -C "$WORKSPACE" add .gitignore
   git -C "$WORKSPACE" commit --allow-empty -m "initial: openclaw workspace" --quiet
   ok "Initialized git repo in workspace"
 else
+  # Ensure gitignore is up to date
+  grep -qxF '.doppler-service-token' "$WORKSPACE/.gitignore" 2>/dev/null \
+    || echo ".doppler-service-token" >> "$WORKSPACE/.gitignore"
   ok "Git repo already exists"
 fi
 
@@ -239,63 +244,87 @@ step "Fixing volume permissions"
 
 CONTAINER_ID=$(docker ps -qf "label=devcontainer.local_folder=$WORKSPACE")
 if [ -n "$CONTAINER_ID" ]; then
-  docker exec -u root "$CONTAINER_ID" chown -R node:node /home/node/.openclaw 2>/dev/null || true
+  docker exec -u root "$CONTAINER_ID" chown -R node:node /home/node/.openclaw /home/node/.doppler 2>/dev/null || true
   ok "Volume permissions fixed"
 else
   warn "Container not found — skipping permission fix"
 fi
 
-# ── Step 4: Doppler setup inside the container ───────────────────────────
-# Doppler config is bind-mounted from the host (~/.doppler), so if you've
-# already run `doppler login` on your Mac, the container inherits that auth.
+# ── Step 4: Doppler service token ────────────────────────────────────────
+# Uses a Doppler service token instead of interactive login. The token is
+# scoped to chat-force/dev, cached on the host, and injected into the
+# container. No interactive Doppler login needed — ever.
 
-step "Doppler setup (inside container)"
+step "Doppler setup"
 
 # Resolve the container ID (may already be set from step 3b)
 if [ -z "$CONTAINER_ID" ]; then
   CONTAINER_ID=$(docker ps -qf "label=devcontainer.local_folder=$WORKSPACE")
 fi
+
 if [ -z "$CONTAINER_ID" ]; then
   error "Could not find running devcontainer. Skipping Doppler setup."
 else
-  # Check if Doppler is already authenticated (inherited from host bind mount)
-  if docker exec "$CONTAINER_ID" doppler me &>/dev/null; then
-    ok "Doppler already authenticated (from host)"
-  elif command -v doppler &>/dev/null && doppler me &>/dev/null; then
-    # Host is authenticated but container can't see it — likely a path issue
-    warn "Host is authenticated but container doesn't see the token."
-    warn "Falling back to interactive login inside the container."
-    if [ -t 0 ]; then
-      docker exec -it "$CONTAINER_ID" doppler login --yes || true
-    fi
-  elif [ -t 0 ]; then
-    # Neither host nor container is authenticated — interactive login
-    info "Doppler not authenticated. You can either:"
-    info "  1. Run 'doppler login' on your Mac first (recommended — persists across provisions)"
-    info "  2. Log in now inside the container (one-time)"
-    info ""
-    info "Attempting login inside the container..."
-    if docker exec -it "$CONTAINER_ID" doppler login --yes; then
-      ok "Doppler login successful"
+  # Check for cached service token first
+  if [ -f "$DOPPLER_TOKEN_FILE" ]; then
+    DOPPLER_SERVICE_TOKEN=$(cat "$DOPPLER_TOKEN_FILE")
+    # Verify the token still works
+    if docker exec -e "DOPPLER_TOKEN=$DOPPLER_SERVICE_TOKEN" "$CONTAINER_ID" \
+      doppler secrets --only-names &>/dev/null 2>&1; then
+      ok "Doppler service token valid (cached)"
     else
-      warn "Doppler login was not completed. You can finish it later:"
-      warn "  docker exec -it $CONTAINER_ID doppler login --yes"
+      warn "Cached service token expired — will create a new one"
+      rm -f "$DOPPLER_TOKEN_FILE"
+      DOPPLER_SERVICE_TOKEN=""
     fi
-  else
-    warn "No TTY available — cannot run interactive Doppler login."
-    warn "Run 'doppler login' on your Mac, then re-provision."
   fi
 
-  # Link the project non-interactively (only if authenticated)
-  if docker exec "$CONTAINER_ID" doppler me &>/dev/null; then
-    if docker exec "$CONTAINER_ID" \
-      doppler setup --project chat-force --config dev --no-interactive; then
-      ok "Doppler project linked: chat-force / dev"
+  # Create a new service token if we don't have one
+  if [ -z "${DOPPLER_SERVICE_TOKEN:-}" ]; then
+    if ! command -v doppler &>/dev/null; then
+      error "Doppler CLI not found on host. Install it: brew install dopplerhq/cli/doppler"
+      error "Then run: doppler login && doppler setup --project chat-force --config dev"
+      exit 1
+    fi
+
+    if ! doppler me &>/dev/null; then
+      error "Doppler not authenticated on host."
+      error "Run: doppler login"
+      exit 1
+    fi
+
+    # Ensure host CLI is linked to the right project
+    info "Creating Doppler service token for container..."
+    DOPPLER_SERVICE_TOKEN=$(doppler configs tokens create \
+      --project chat-force --config dev \
+      --name "openclaw-container" --plain 2>/dev/null || true)
+
+    if [ -z "$DOPPLER_SERVICE_TOKEN" ]; then
+      # Token with that name may already exist — try to reuse
+      warn "Could not create token (may already exist). Trying with unique name..."
+      DOPPLER_SERVICE_TOKEN=$(doppler configs tokens create \
+        --project chat-force --config dev \
+        --name "openclaw-container-$(date +%s)" --plain 2>/dev/null || true)
+    fi
+
+    if [ -n "$DOPPLER_SERVICE_TOKEN" ]; then
+      echo "$DOPPLER_SERVICE_TOKEN" > "$DOPPLER_TOKEN_FILE"
+      chmod 600 "$DOPPLER_TOKEN_FILE"
+      ok "Doppler service token created and cached"
     else
-      warn "Doppler project setup failed. Run inside the container:"
-      warn "  docker exec -it $CONTAINER_ID doppler setup --project chat-force --config dev"
+      error "Failed to create Doppler service token."
+      error "Make sure your host Doppler CLI is set up:"
+      error "  doppler login"
+      error "  doppler setup --project chat-force --config dev"
+      exit 1
     fi
   fi
+
+  # Inject the token into the container's environment
+  # Write it to a file inside the container that start-openclaw.sh reads
+  docker exec "$CONTAINER_ID" bash -c \
+    "echo 'DOPPLER_TOKEN=$DOPPLER_SERVICE_TOKEN' > /home/node/.openclaw/.env.doppler && chmod 600 /home/node/.openclaw/.env.doppler"
+  ok "Doppler token injected into container"
 fi
 
 # ── Step 5: OpenAI Codex OAuth setup ──────────────────────────────────────

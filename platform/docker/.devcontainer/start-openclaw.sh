@@ -9,26 +9,32 @@ set -e
 
 CONFIG_DIR="/home/node/.openclaw"
 TEMPLATE_DIR="/workspace/platform/docker/config"
+DOPPLER_ENV_FILE="$CONFIG_DIR/.env.doppler"
 
-# ── Check Doppler authentication ──────────────────────────────────────────
-if ! doppler me &>/dev/null; then
-  echo ""
-  echo "Doppler is not authenticated. Starting interactive login..."
-  echo "(This will open a browser on your host machine.)"
-  echo ""
-  doppler login
+# ── Load Doppler service token ────────────────────────────────────────────
+# The service token is injected by provision.sh — no interactive login needed.
+if [ -z "${DOPPLER_TOKEN:-}" ] && [ -f "$DOPPLER_ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$DOPPLER_ENV_FILE"
+  export DOPPLER_TOKEN
 fi
 
-echo "Doppler auth: OK ($(doppler me --json 2>/dev/null | jq -r '.name // "authenticated"'))"
-
-# ── Check project is linked ───────────────────────────────────────────────
-if ! doppler secrets --only-names &>/dev/null; then
+if [ -z "${DOPPLER_TOKEN:-}" ]; then
   echo ""
-  echo "Linking Doppler project..."
-  doppler setup --project chat-force --config dev
+  echo "ERROR: No Doppler service token found."
+  echo "Re-run provision.sh on your Mac to set up Doppler."
+  exit 1
 fi
 
-echo "Doppler project: chat-force / dev"
+# Verify the token works
+if ! doppler secrets --only-names &>/dev/null 2>&1; then
+  echo ""
+  echo "ERROR: Doppler service token is invalid or expired."
+  echo "Re-run provision.sh on your Mac to create a new one."
+  exit 1
+fi
+
+echo "Doppler: OK (service token)"
 
 # ── Verify required secrets exist ─────────────────────────────────────────
 echo ""

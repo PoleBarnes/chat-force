@@ -10,7 +10,7 @@
   "mounts": [
     "source=${devcontainerId}-openclaw-config,target=/home/node/.openclaw,type=volume",
     "source=${devcontainerId}-openclaw-workspace,target=/home/node/.openclaw/workspace,type=volume",
-    "source=${localEnv:HOME}/.doppler,target=/home/node/.doppler,type=bind,consistency=cached"
+    "source=${devcontainerId}-doppler,target=/home/node/.doppler,type=volume"
   ],
 
   "containerEnv": {
