@@ -80,8 +80,10 @@ Reference repo: `PoleBarnes/blacktie-marketing` — has previous BlackTie campai
 
 ### Safety Rules — CRITICAL
 
-- **DO NOT push to main on any repo.** PoleBarnes/blacktie-marketing has Vercel on main.
-- **Work on feature branches.** Commit locally, do not push unless to a feature branch.
+- **DO NOT commit or push to main on any repo.** Create a feature branch FIRST (e.g., `sprint/phase0-buildout`). All work goes there.
+- **PoleBarnes/blacktie-marketing has Vercel on main** — absolutely never push to main there.
+- **PoleBarnes/chat-force** — use feature branches too. Main is the stable baseline.
+- You can use multiple branches if it makes sense (e.g., one per workstream), but never main.
 - **DO NOT deploy anything externally.**
 - **Test via gateway CLI only** — `openclaw agent --agent main --message "..."`, not Slack.
 - When testing Leo with the campaign job, prefix with "TEST ONLY: Do not deploy or publish."
