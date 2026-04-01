@@ -14,6 +14,7 @@
       "botToken": "${SLACK_BOT_TOKEN}",
       "appToken": "${SLACK_APP_TOKEN}",
       "dmPolicy": "open",
+      "allowFrom": ["*"],
       "groupPolicy": "open",
       "historyLimit": 50
     }
