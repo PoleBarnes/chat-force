@@ -86,8 +86,8 @@ if $CLEAN || $DESTROY; then
     info "No container found for $WORKSPACE"
   fi
 
-  # Remove associated volumes
-  VOLUMES=$(docker volume ls -q 2>/dev/null | grep -E "openclaw|doppler" || true)
+  # Remove associated volumes (doppler is a bind mount, not a volume)
+  VOLUMES=$(docker volume ls -q 2>/dev/null | grep -E "openclaw" || true)
   if [ -n "$VOLUMES" ]; then
     info "Removing volumes..."
     echo "$VOLUMES" | xargs docker volume rm 2>/dev/null || true
@@ -185,6 +185,9 @@ step "Setting up workspace at $WORKSPACE"
 
 mkdir -p "$WORKSPACE"
 
+# Ensure Doppler config dir exists on host (bind-mounted into container)
+mkdir -p "$HOME/.doppler"
+
 # Copy .devcontainer files
 if [ ! -d "$DEVCONTAINER_SRC" ]; then
   error "Cannot find .devcontainer source at: $DEVCONTAINER_SRC"
@@ -236,13 +239,15 @@ step "Fixing volume permissions"
 
 CONTAINER_ID=$(docker ps -qf "label=devcontainer.local_folder=$WORKSPACE")
 if [ -n "$CONTAINER_ID" ]; then
-  docker exec -u root "$CONTAINER_ID" chown -R node:node /home/node/.openclaw /home/node/.doppler 2>/dev/null || true
+  docker exec -u root "$CONTAINER_ID" chown -R node:node /home/node/.openclaw 2>/dev/null || true
   ok "Volume permissions fixed"
 else
   warn "Container not found — skipping permission fix"
 fi
 
 # ── Step 4: Doppler setup inside the container ───────────────────────────
+# Doppler config is bind-mounted from the host (~/.doppler), so if you've
+# already run `doppler login` on your Mac, the container inherits that auth.
 
 step "Doppler setup (inside container)"
 
@@ -253,13 +258,23 @@ fi
 if [ -z "$CONTAINER_ID" ]; then
   error "Could not find running devcontainer. Skipping Doppler setup."
 else
-  # Check if Doppler is already authenticated
+  # Check if Doppler is already authenticated (inherited from host bind mount)
   if docker exec "$CONTAINER_ID" doppler me &>/dev/null; then
-    ok "Doppler already authenticated"
+    ok "Doppler already authenticated (from host)"
+  elif command -v doppler &>/dev/null && doppler me &>/dev/null; then
+    # Host is authenticated but container can't see it — likely a path issue
+    warn "Host is authenticated but container doesn't see the token."
+    warn "Falling back to interactive login inside the container."
+    if [ -t 0 ]; then
+      docker exec -it "$CONTAINER_ID" doppler login --yes || true
+    fi
   elif [ -t 0 ]; then
-    # Interactive login -- needs TTY for browser auth flow
-    info "You will be prompted to log in to Doppler via your browser."
+    # Neither host nor container is authenticated — interactive login
+    info "Doppler not authenticated. You can either:"
+    info "  1. Run 'doppler login' on your Mac first (recommended — persists across provisions)"
+    info "  2. Log in now inside the container (one-time)"
     info ""
+    info "Attempting login inside the container..."
     if docker exec -it "$CONTAINER_ID" doppler login --yes; then
       ok "Doppler login successful"
     else
@@ -268,8 +283,7 @@ else
     fi
   else
     warn "No TTY available — cannot run interactive Doppler login."
-    warn "Run this in your terminal to authenticate:"
-    warn "  docker exec -it $CONTAINER_ID doppler login --yes"
+    warn "Run 'doppler login' on your Mac, then re-provision."
   fi
 
   # Link the project non-interactively (only if authenticated)
