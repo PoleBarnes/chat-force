@@ -10,14 +10,13 @@ echo ""
 # ── Check that Doppler CLI is installed ─────────────────────────────────────
 
 if ! command -v doppler &>/dev/null; then
-  echo "ERROR: Doppler CLI is not installed."
-  echo ""
-  echo "Install it with:"
-  echo "  curl -sLf --retry 3 --tlsv1.2 --proto '=https' \\
-    'https://cli.doppler.com/install.sh' | sudo sh"
-  echo ""
-  echo "Or see: https://docs.doppler.com/docs/install-cli"
-  exit 1
+  echo "Doppler CLI not found. Installing..."
+  curl -sLf --retry 3 --tlsv1.2 --proto "=https" "https://cli.doppler.com/install.sh" | sudo sh
+  if ! command -v doppler &>/dev/null; then
+    echo "ERROR: Doppler CLI installation failed."
+    echo "Try manually: https://docs.doppler.com/docs/install-cli"
+    exit 1
+  fi
 fi
 
 echo "Doppler CLI found: $(doppler --version)"
