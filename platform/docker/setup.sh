@@ -53,7 +53,7 @@ echo "Verifying required secrets..."
 REQUIRED_SECRETS="SLACK_BOT_TOKEN SLACK_APP_TOKEN ANTHROPIC_AUTH_TOKEN"
 MISSING=""
 
-SECRET_NAMES=$(doppler secrets --only-names --no-interactive 2>/dev/null)
+SECRET_NAMES=$(doppler secrets --only-names --plain --no-interactive 2>/dev/null)
 
 for secret in $REQUIRED_SECRETS; do
   if echo "$SECRET_NAMES" | grep -qx "$secret"; then
