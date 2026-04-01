@@ -73,6 +73,15 @@ else
   echo "  (no templates found at $TEMPLATE_DIR, skipping)"
 fi
 
+# ── Copy auth-profiles to agent directory ─────────────────────────────────
+# OpenClaw agents read auth from their own directory, not the root config
+AGENT_AUTH_DIR="$CONFIG_DIR/agents/main/agent"
+mkdir -p "$AGENT_AUTH_DIR"
+if [ -f "$CONFIG_DIR/auth-profiles.json" ]; then
+  cp "$CONFIG_DIR/auth-profiles.json" "$AGENT_AUTH_DIR/auth-profiles.json"
+  echo "  auth-profiles.json -> $AGENT_AUTH_DIR/auth-profiles.json"
+fi
+
 # ── Start OpenClaw gateway ────────────────────────────────────────────────
 echo ""
 echo "Starting OpenClaw gateway on port 3001..."
