@@ -5,6 +5,15 @@ set -e
 
 HOME_DIR="/home/node"
 
+# ── Fix volume ownership (Docker volumes default to root) ────────────────
+# Named volumes mount as root:root. Fix ownership so node user can write.
+for dir in "$HOME_DIR/.openclaw" "$HOME_DIR/.doppler"; do
+  if [ -d "$dir" ] && [ ! -w "$dir" ]; then
+    echo "Fixing ownership: $dir"
+    sudo chown -R node:node "$dir"
+  fi
+done
+
 # ── Ensure OpenClaw directory structure exists ────────────────────────────
 mkdir -p "$HOME_DIR/.openclaw/agents/main/agent"
 mkdir -p "$HOME_DIR/.openclaw/agents/main/sessions"

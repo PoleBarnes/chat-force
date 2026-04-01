@@ -7,11 +7,12 @@ FROM ghcr.io/openclaw/openclaw:latest
 
 USER root
 
-# ── Doppler CLI ────────────────────────────────────────────────────────────
+# ── Doppler CLI + sudo ─────────────────────────────────────────────────────
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl gettext-base \
+  && apt-get install -y --no-install-recommends curl gettext-base sudo \
   && curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
        "https://cli.doppler.com/install.sh" | sh \
+  && echo "node ALL=(ALL) NOPASSWD: /bin/chown, /bin/mkdir" >> /etc/sudoers.d/node-openclaw \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ── Copy scripts ──────────────────────────────────────────────────────────

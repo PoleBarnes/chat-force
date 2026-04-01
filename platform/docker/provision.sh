@@ -152,12 +152,26 @@ else
   exit 1
 fi
 
+# ── Step 3b: Fix Docker volume permissions ───────────────────────────────
+
+step "Fixing volume permissions"
+
+CONTAINER_ID=$(docker ps -qf "label=devcontainer.local_folder=$WORKSPACE")
+if [ -n "$CONTAINER_ID" ]; then
+  docker exec -u root "$CONTAINER_ID" chown -R node:node /home/node/.openclaw /home/node/.doppler 2>/dev/null || true
+  ok "Volume permissions fixed"
+else
+  warn "Container not found — skipping permission fix"
+fi
+
 # ── Step 4: Doppler setup inside the container ───────────────────────────
 
 step "Doppler setup (inside container)"
 
-# Resolve the container ID for docker exec (devcontainer exec doesn't support TTY)
-CONTAINER_ID=$(docker ps -qf "label=devcontainer.local_folder=$WORKSPACE")
+# Resolve the container ID (may already be set from step 3b)
+if [ -z "$CONTAINER_ID" ]; then
+  CONTAINER_ID=$(docker ps -qf "label=devcontainer.local_folder=$WORKSPACE")
+fi
 if [ -z "$CONTAINER_ID" ]; then
   error "Could not find running devcontainer. Skipping Doppler setup."
 else
