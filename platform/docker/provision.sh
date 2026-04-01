@@ -12,13 +12,42 @@
 # volumes, so the workspace directory can be recreated without data loss.
 #
 # Usage:
-#   ./provision.sh                        # defaults to ~/.chat-force/openclaw
+#   ./provision.sh                        # normal provision (idempotent)
+#   ./provision.sh --clean                # stop + remove container and volumes, then provision fresh
+#   ./provision.sh --destroy              # tear everything down (container, volumes, workspace) and exit
 #   WORKSPACE=~/my/path ./provision.sh    # custom workspace location
 set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
 
 WORKSPACE="${WORKSPACE:-$HOME/.chat-force/openclaw}"
+CLEAN=false
+DESTROY=false
+
+# Parse flags
+for arg in "$@"; do
+  case "$arg" in
+    --clean)   CLEAN=true ;;
+    --destroy) DESTROY=true ;;
+    --help|-h)
+      echo "Usage: ./provision.sh [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  --clean     Remove container and volumes, then re-provision from scratch"
+      echo "  --destroy   Remove container, volumes, and workspace directory, then exit"
+      echo "  --help      Show this help"
+      echo ""
+      echo "Environment:"
+      echo "  WORKSPACE   Workspace path (default: ~/.chat-force/openclaw)"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $arg (try --help)"
+      exit 1
+      ;;
+  esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEVCONTAINER_SRC="$SCRIPT_DIR/.devcontainer"
 CONFIG_SRC="$SCRIPT_DIR/config"
@@ -40,6 +69,55 @@ ok()    { echo -e "${GREEN}[ok]${RESET}    $*"; }
 warn()  { echo -e "${YELLOW}[warn]${RESET}  $*"; }
 error() { echo -e "${RED}[error]${RESET} $*"; }
 step()  { echo -e "\n${BOLD}── $* ──${RESET}"; }
+
+# ── Teardown (--clean or --destroy) ──────────────────────────────────────
+
+if $CLEAN || $DESTROY; then
+  step "Tearing down existing environment"
+
+  # Stop and remove the container
+  CID=$(docker ps -aqf "label=devcontainer.local_folder=$WORKSPACE" 2>/dev/null || true)
+  if [ -n "$CID" ]; then
+    info "Stopping container $CID..."
+    docker stop "$CID" 2>/dev/null || true
+    docker rm "$CID" 2>/dev/null || true
+    ok "Container removed"
+  else
+    info "No container found for $WORKSPACE"
+  fi
+
+  # Remove associated volumes
+  VOLUMES=$(docker volume ls -q 2>/dev/null | grep -E "openclaw|doppler" || true)
+  if [ -n "$VOLUMES" ]; then
+    info "Removing volumes..."
+    echo "$VOLUMES" | xargs docker volume rm 2>/dev/null || true
+    ok "Volumes removed"
+  else
+    info "No matching volumes found"
+  fi
+
+  # Remove the built image (forces rebuild on next provision)
+  IMAGE=$(docker images -q --filter "label=devcontainer.local_folder=$WORKSPACE" 2>/dev/null || true)
+  if [ -n "$IMAGE" ]; then
+    info "Removing devcontainer image..."
+    docker rmi "$IMAGE" 2>/dev/null || true
+    ok "Image removed"
+  fi
+
+  if $DESTROY; then
+    # Also remove the workspace directory
+    if [ -d "$WORKSPACE" ]; then
+      info "Removing workspace directory: $WORKSPACE"
+      rm -rf "$WORKSPACE"
+      ok "Workspace removed"
+    fi
+    echo ""
+    ok "Full teardown complete. Nothing left."
+    exit 0
+  fi
+
+  ok "Teardown complete — continuing with fresh provision..."
+fi
 
 # ── Preflight: must be macOS ──────────────────────────────────────────────
 
@@ -263,4 +341,10 @@ echo "     docker stop \$(docker ps -qf label=devcontainer.local_folder=$WORKSPA
 echo ""
 echo "  To re-provision (idempotent):"
 echo "     $SCRIPT_DIR/provision.sh"
+echo ""
+echo "  To wipe and re-provision from scratch:"
+echo "     $SCRIPT_DIR/provision.sh --clean"
+echo ""
+echo "  To tear down everything (container + volumes + workspace):"
+echo "     $SCRIPT_DIR/provision.sh --destroy"
 echo ""
