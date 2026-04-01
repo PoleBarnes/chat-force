@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "OpenClaw Self-Hosted",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:UTC}"
+    }
+  },
+  "remoteUser": "vscode",
+  "init": true,
+  "updateRemoteUserUID": true,
+
+  "mounts": [
+    "source=${devcontainerId}-openclaw-data,target=/home/vscode/.openclaw,type=volume",
+    "source=${devcontainerId}-doppler,target=/home/vscode/.doppler,type=volume",
+    "source=${devcontainerId}-commandhistory,target=/home/vscode/.shell_history,type=volume"
+  ],
+
+  "containerEnv": {
+    "PUPPETEER_EXECUTABLE_PATH": "/usr/bin/chromium",
+    "CHROME_BIN": "/usr/bin/chromium",
+    "NODE_OPTIONS": "--max-old-space-size=4096"
+  },
+
+  "forwardPorts": [3001],
+  "portsAttributes": {
+    "3001": {
+      "label": "OpenClaw Gateway",
+      "onAutoForward": "notify"
+    }
+  },
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+
+  "postCreateCommand": "bash /opt/post_install.sh",
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh"
+      }
+    }
+  }
+}
