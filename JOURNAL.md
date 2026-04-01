@@ -1,7 +1,7 @@
 # Engineering Journal — Digital Workforce Platform
 
 ## Current Phase: Phase 0 — Validate with Real Work
-## Current Task: Give bot a real marketing task from active client
+## Current Task: Sprint — build out platform capabilities
 ## Blocked On: Nothing
 
 ---
@@ -10,6 +10,10 @@
 - [x] Task 0.1: Sign up for KiloClaw — DONE 2026-04-01
 - [x] Task 0.2: Deploy OpenClaw instance — DONE 2026-04-01 (Frontier tier, Claude Opus 4.6)
 - [x] Task 0.3: Connect to Slack workspace — DONE 2026-04-01 (Travis's personal workspace)
+- [x] Task 0.3.1: Configure Leo identity and workspace files — DONE 2026-04-01
+- [x] Task 0.3.2: Fix Gemini provider config (baseUrl + models required) — DONE 2026-04-01
+- [x] Task 0.3.3: Generate and set Slack app icon — DONE 2026-04-01
+- [x] Task 0.3.4: Verify Leo responds correctly via gateway CLI — DONE 2026-04-01
 - [ ] Task 0.4: Give bot a real marketing task from active client — TODO
 - [ ] Task 0.5: Work with bot for several days, document findings — TODO
 - [ ] Task 0.6: Identify first 2-3 workflows for SOPs — TODO
@@ -88,6 +92,13 @@
 - 2026-04-01: Self-hosted OpenClaw running in devcontainer via OrbStack on Mac Mini
 - 2026-04-01: Doppler secrets management configured (SLACK_BOT_TOKEN, SLACK_APP_TOKEN, ANTHROPIC_AUTH_TOKEN, OPENCLAW_GATEWAY_TOKEN)
 - 2026-04-01: OpenClaw 2026.4.1 gateway live, Slack socket mode connected, Claude Opus 4.6
+- 2026-04-01: Gemini provider config fixed — requires baseUrl + models array (was missing, causing config validation failure)
+- 2026-04-01: Leo identity configured — digital worker (not assistant), owns marketing/engineering/ops, SOP factory
+- 2026-04-01: Workspace files pre-seeded (IDENTITY, SOUL, USER, AGENTS, TOOLS) — bypassed bootstrap ritual
+- 2026-04-01: Slack app renamed to "Leo" with custom generated icon (Imagen 4.0)
+- 2026-04-01: Gateway CLI (`openclaw agent --agent main --message "..."`) verified as test harness — bypasses Slack
+- 2026-04-01: uv installed via brew for clean Python execution (replaces system pip3)
+- 2026-04-01: Travis Dev Slack app created and deleted — Slack API always attaches bot_id to app tokens, can't send as user
 
 ### Questions for Human
 - [PENDING] See Phase 0 questions batch below

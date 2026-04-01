@@ -1,0 +1,20 @@
+display_information:
+  name: Travis Dev
+  description: Dev access for testing and monitoring Leo
+  background_color: "#0F2318"
+
+oauth_config:
+  scopes:
+    user:
+      - chat:write
+      - channels:read
+      - channels:history
+      - im:read
+      - im:write
+      - im:history
+      - users:read
+
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
