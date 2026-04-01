@@ -2,30 +2,24 @@
   "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
   "name": "OpenClaw Self-Hosted",
   "build": {
-    "dockerfile": "Dockerfile",
-    "args": {
-      "TZ": "${localEnv:TZ:UTC}"
-    }
+    "dockerfile": "Dockerfile"
   },
-  "remoteUser": "vscode",
+  "remoteUser": "node",
   "init": true,
-  "updateRemoteUserUID": true,
 
   "mounts": [
-    "source=${devcontainerId}-openclaw-data,target=/home/vscode/.openclaw,type=volume",
-    "source=${devcontainerId}-doppler,target=/home/vscode/.doppler,type=volume",
-    "source=${devcontainerId}-commandhistory,target=/home/vscode/.shell_history,type=volume"
+    "source=${devcontainerId}-openclaw-config,target=/home/node/.openclaw,type=volume",
+    "source=${devcontainerId}-openclaw-workspace,target=/home/node/.openclaw/workspace,type=volume",
+    "source=${devcontainerId}-doppler,target=/home/node/.doppler,type=volume"
   ],
 
   "containerEnv": {
-    "PUPPETEER_EXECUTABLE_PATH": "/usr/bin/chromium",
-    "CHROME_BIN": "/usr/bin/chromium",
-    "NODE_OPTIONS": "--max-old-space-size=4096"
+    "TZ": "UTC"
   },
 
-  "forwardPorts": [3001],
+  "forwardPorts": [18789],
   "portsAttributes": {
-    "3001": {
+    "18789": {
       "label": "OpenClaw Gateway",
       "onAutoForward": "notify"
     }
@@ -39,7 +33,7 @@
   "customizations": {
     "vscode": {
       "settings": {
-        "terminal.integrated.defaultProfile.linux": "zsh"
+        "terminal.integrated.defaultProfile.linux": "bash"
       }
     }
   }

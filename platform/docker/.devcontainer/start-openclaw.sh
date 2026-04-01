@@ -7,7 +7,7 @@
 # gateway.
 set -e
 
-CONFIG_DIR="$HOME/.openclaw"
+CONFIG_DIR="/home/node/.openclaw"
 TEMPLATE_DIR="/workspace/platform/docker/config"
 
 # ── Check Doppler authentication ──────────────────────────────────────────
@@ -54,18 +54,20 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
+# ── Pre-create directory structure ────────────────────────────────────────
+mkdir -p "$CONFIG_DIR/agents/main/agent"
+mkdir -p "$CONFIG_DIR/agents/main/sessions"
+mkdir -p "$CONFIG_DIR/identity"
+
 # ── Substitute config templates ───────────────────────────────────────────
 # Use Doppler to export secrets as env vars, then envsubst to fill templates.
 echo ""
 echo "Generating config files from templates..."
 
-mkdir -p "$CONFIG_DIR"
-
 if [ -d "$TEMPLATE_DIR" ]; then
   for template in "$TEMPLATE_DIR"/*.json; do
     [ -f "$template" ] || continue
     filename="$(basename "$template")"
-    # Run envsubst with the secrets from Doppler injected into the environment
     doppler run -- bash -c "envsubst < '$template'" > "$CONFIG_DIR/$filename"
     echo "  $filename -> $CONFIG_DIR/$filename"
   done
@@ -74,9 +76,8 @@ else
 fi
 
 # ── Copy auth-profiles to agent directory ─────────────────────────────────
-# OpenClaw agents read auth from their own directory, not the root config
+# OpenClaw reads auth from both the root config dir and each agent's directory.
 AGENT_AUTH_DIR="$CONFIG_DIR/agents/main/agent"
-mkdir -p "$AGENT_AUTH_DIR"
 if [ -f "$CONFIG_DIR/auth-profiles.json" ]; then
   cp "$CONFIG_DIR/auth-profiles.json" "$AGENT_AUTH_DIR/auth-profiles.json"
   echo "  auth-profiles.json -> $AGENT_AUTH_DIR/auth-profiles.json"
@@ -84,8 +85,8 @@ fi
 
 # ── Start OpenClaw gateway ────────────────────────────────────────────────
 echo ""
-echo "Starting OpenClaw gateway on port 3001..."
+echo "Starting OpenClaw gateway on port 18789..."
 echo "Press Ctrl+C to stop."
 echo ""
 
-exec doppler run -- openclaw gateway --bind lan
+exec doppler run -- openclaw gateway --bind lan --port 18789

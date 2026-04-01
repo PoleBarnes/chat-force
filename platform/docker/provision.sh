@@ -143,7 +143,7 @@ fi
 
 step "Starting devcontainer"
 
-info "This may take several minutes on first run (building image)..."
+info "This may take a minute on first run (pulling official image + adding Doppler)..."
 
 if devcontainer up --workspace-folder "$WORKSPACE"; then
   ok "Devcontainer is running"
@@ -203,14 +203,14 @@ echo ""
 echo -e "${BOLD}Next steps:${RESET}"
 echo ""
 echo "  1. Open a shell in the container:"
-echo "     devcontainer exec --workspace-folder $WORKSPACE /bin/zsh"
+echo "     devcontainer exec --workspace-folder $WORKSPACE /bin/bash"
 echo ""
 echo "  2. Start OpenClaw:"
-echo "     start-openclaw"
-echo "     # or: doppler run -- openclaw gateway --bind lan"
+echo "     /opt/start-openclaw.sh"
+echo "     # or: doppler run -- openclaw gateway --bind lan --port 18789"
 echo ""
 echo "  3. The gateway will be available at:"
-echo "     http://localhost:3001"
+echo "     http://localhost:18789"
 echo ""
 echo "  To stop the container:"
 echo "     docker stop \$(docker ps -qf label=devcontainer.local_folder=$WORKSPACE)"

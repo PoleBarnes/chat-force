@@ -21,7 +21,7 @@
   },
 
   "gateway": {
-    "port": 3001,
+    "port": 18789,
     "mode": "local",
     "bind": "lan",
     "auth": {
