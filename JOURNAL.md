@@ -1,7 +1,7 @@
 # Engineering Journal — Digital Workforce Platform
 
-## Current Phase: Phase 0 — Validate with Real Work
-## Current Task: Sprint — build out platform capabilities
+## Current Phase: Phase 0 → Phase 1 Transition
+## Current Task: Sprint complete — ready for integration testing
 ## Blocked On: Nothing
 
 ---
@@ -14,11 +14,38 @@
 - [x] Task 0.3.2: Fix Gemini provider config (baseUrl + models required) — DONE 2026-04-01
 - [x] Task 0.3.3: Generate and set Slack app icon — DONE 2026-04-01
 - [x] Task 0.3.4: Verify Leo responds correctly via gateway CLI — DONE 2026-04-01
-- [ ] Task 0.4: Give bot a real marketing task from active client — TODO
+- [ ] Task 0.4: Give bot a real marketing task from active client — READY (BlackTie campaign fixture + skills ready)
 - [ ] Task 0.5: Work with bot for several days, document findings — TODO
-- [ ] Task 0.6: Identify first 2-3 workflows for SOPs — TODO
-- [ ] Task 0.7: Test cron scheduling (daily check-in) — TODO
+- [ ] Task 0.6: Identify first 2-3 workflows for SOPs — PARTIALLY DONE (ad-campaign SOP created from PoleBarnes/ad-campaign-agent patterns)
+- [ ] Task 0.7: Test cron scheduling (daily check-in) — READY (cron configs written, need deployment)
 - [ ] Task 0.8: Validate Slack as the right decision layer — TODO
+
+### Sprint: Phase 0 Buildout — 2026-04-01
+- [x] Task S.1: Create feature branch (sprint/phase0-buildout) — DONE 2026-04-01
+- [x] Task S.2: Build OpenClaw skills framework (8 skills) — DONE 2026-04-01
+- [x] Task S.3: Build ad-campaign SOP (YAML, 17 steps, 2 approval gates) — DONE 2026-04-01
+- [x] Task S.4: Build landing-page SOP — DONE 2026-04-01
+- [x] Task S.5: Build email-sequence SOP — DONE 2026-04-01
+- [x] Task S.6: Create SOP template for new SOPs — DONE 2026-04-01
+- [x] Task S.7: Implement LangGraph orchestrator with real Claude integration — DONE 2026-04-01
+- [x] Task S.8: Implement context assembly (3-tier: platform → workspace → thread) — DONE 2026-04-01
+- [x] Task S.9: Implement task routing (keyword + SOP matching + complexity heuristics) — DONE 2026-04-01
+- [x] Task S.10: Implement SOP loader with workspace/platform search — DONE 2026-04-01
+- [x] Task S.11: Implement Mechanic B with real Claude-powered quality analysis — DONE 2026-04-01
+- [x] Task S.12: Implement SOP runner with real specialist dispatch — DONE 2026-04-01
+- [x] Task S.13: Create BlackTie workspace (config, brand context, forms) — DONE 2026-04-01
+- [x] Task S.14: Create workspace template for customer onboarding — DONE 2026-04-01
+- [x] Task S.15: Security: enhanced exec-approvals.json — DONE 2026-04-01
+- [x] Task S.16: Security: audit logging system (AuditLogger + secret patterns) — DONE 2026-04-01
+- [x] Task S.17: Security: git pre-push hook for secret scanning — DONE 2026-04-01
+- [x] Task S.18: Security: self-modification guard documentation — DONE 2026-04-01
+- [x] Task S.19: Security: secret injection flow documentation — DONE 2026-04-01
+- [x] Task S.20: Proactive: heartbeat cron config (2hr business hours) — DONE 2026-04-01
+- [x] Task S.21: Proactive: morning briefing config — DONE 2026-04-01
+- [x] Task S.22: Proactive: standing orders config (SOP detection, memory, health) — DONE 2026-04-01
+- [x] Task S.23: Proactive: CRON.md workspace file for Leo — DONE 2026-04-01
+- [x] Task S.24: Updated .gitignore — DONE 2026-04-01
+- [x] Task S.25: Test suite written and executed — DONE 2026-04-01
 
 ### Phase 1: LangGraph Integration
 - [ ] Task 1.1: Set up LangGraph Cloud + LangSmith — TODO
@@ -99,6 +126,14 @@
 - 2026-04-01: Gateway CLI (`openclaw agent --agent main --message "..."`) verified as test harness — bypasses Slack
 - 2026-04-01: uv installed via brew for clean Python execution (replaces system pip3)
 - 2026-04-01: Travis Dev Slack app created and deleted — Slack API always attaches bot_id to app tokens, can't send as user
+- 2026-04-01: Skills implemented as markdown with YAML frontmatter — OpenClaw injects them into context when relevant triggers match
+- 2026-04-01: Ad campaign SOP modeled after PoleBarnes/ad-campaign-agent (research→generate two-phase with approval gates)
+- 2026-04-01: Using Anthropic SDK directly (not langchain-anthropic) for LLM calls in orchestrator — simpler, fewer dependencies
+- 2026-04-01: Mechanic B uses Claude as LLM judge for quality scoring — scores against evaluation-criteria.yaml weights
+- 2026-04-01: SOP runner implements graph caching to avoid re-parsing YAML on repeated calls
+- 2026-04-01: Audit logger uses JSONL format (one JSON object per line) for easy streaming and analysis
+- 2026-04-01: Secret patterns compiled as regex at module load time for performance
+- 2026-04-01: BlackTie workspace configured as Tier 2 (direct Slack access) with agricultural market focus
 
 ### Questions for Human
 - [PENDING] See Phase 0 questions batch below

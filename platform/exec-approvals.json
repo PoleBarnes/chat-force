@@ -43,6 +43,68 @@
       "flags_permitted": ["-u", "--iso-8601", "+%Y-%m-%d", "+%s"]
     },
     {
+      "command": "wc",
+      "description": "Word, line, and byte count",
+      "flags_permitted": ["-l", "-w", "-c"]
+    },
+    {
+      "command": "sort",
+      "description": "Sort lines of text",
+      "flags_permitted": ["-n", "-r", "-u", "-k"]
+    },
+    {
+      "command": "uniq",
+      "description": "Report or omit repeated lines",
+      "flags_permitted": ["-c", "-d"]
+    },
+    {
+      "command": "mkdir",
+      "description": "Create directories",
+      "flags_permitted": ["-p"]
+    },
+    {
+      "command": "cp",
+      "description": "Copy files and directories",
+      "flags_permitted": ["-r", "-R"]
+    },
+    {
+      "command": "mv",
+      "description": "Move or rename files and directories",
+      "flags_permitted": [],
+      "constraints": {
+        "note": "No dangerous flags — basic move/rename only"
+      }
+    },
+    {
+      "command": "touch",
+      "description": "Create empty files or update timestamps",
+      "flags_permitted": []
+    },
+    {
+      "command": "rm",
+      "description": "Remove single files only (recursive force blocked)",
+      "flags_permitted": [],
+      "constraints": {
+        "note": "Only single file deletion allowed. rm -rf and rm -fr are blocked."
+      }
+    },
+    {
+      "command": "python3",
+      "description": "Execute Python scripts",
+      "flags_permitted": ["-c", "-m"],
+      "constraints": {
+        "note": "Scripts must be within the workspace directory. No unbounded execution."
+      }
+    },
+    {
+      "command": "uv",
+      "description": "Python package and project management (preferred over pip)",
+      "flags_permitted": ["run", "pip", "sync", "lock", "init", "add", "remove", "venv"],
+      "constraints": {
+        "note": "Use uv instead of pip for all Python package operations."
+      }
+    },
+    {
       "command": "git status",
       "description": "Show the working tree status",
       "flags_permitted": ["-s", "--short", "--porcelain"]
@@ -63,8 +125,56 @@
       "flags_permitted": ["--stat", "--name-only", "--pretty"]
     },
     {
+      "command": "git branch",
+      "description": "List, create, or delete branches",
+      "flags_permitted": ["--list", "-a", "-d"],
+      "constraints": {
+        "note": "Use -d (safe delete) only. Force delete -D is not permitted."
+      }
+    },
+    {
+      "command": "git checkout",
+      "description": "Switch branches or restore working tree files",
+      "flags_permitted": ["-b"],
+      "constraints": {
+        "note": "Checking out main or master is blocked to enforce feature branch workflow."
+      }
+    },
+    {
+      "command": "git add",
+      "description": "Stage files for commit",
+      "flags_permitted": ["-A", "--all"],
+      "constraints": {
+        "note": "Prefer staging specific files over -A/--all to avoid committing secrets."
+      }
+    },
+    {
+      "command": "git commit",
+      "description": "Record changes to the repository",
+      "flags_permitted": ["-m", "--message"],
+      "constraints": {
+        "note": "Always include a meaningful commit message."
+      }
+    },
+    {
+      "command": "git push",
+      "description": "Push commits to remote",
+      "flags_permitted": ["-u", "--set-upstream"],
+      "constraints": {
+        "note": "Pushing to main/master is blocked. Force push is blocked."
+      }
+    },
+    {
+      "command": "git pull",
+      "description": "Fetch and integrate remote changes",
+      "flags_permitted": ["--rebase"],
+      "constraints": {
+        "note": "No dangerous flags. Standard pull or pull --rebase only."
+      }
+    },
+    {
       "command": "curl",
-      "description": "Transfer data from a URL (GET requests only)",
+      "description": "Transfer data from a URL (GET requests only by default)",
       "flags_permitted": ["-s", "-S", "-L", "-o", "-H", "--header", "-I", "--head", "-f", "--fail"],
       "constraints": {
         "method": "GET",
@@ -121,12 +231,93 @@
     {
       "pattern": ":(){ :|:& };:",
       "reason": "Fork bomb"
+    },
+    {
+      "pattern": "git checkout main",
+      "reason": "Feature branch workflow enforced — no direct work on main"
+    },
+    {
+      "pattern": "git checkout master",
+      "reason": "Feature branch workflow enforced — no direct work on master"
+    },
+    {
+      "pattern": "git push.*main",
+      "reason": "Direct push to main is blocked — use pull requests"
+    },
+    {
+      "pattern": "git push.*master",
+      "reason": "Direct push to master is blocked — use pull requests"
+    },
+    {
+      "pattern": "git push --force",
+      "reason": "Force push can destroy remote history"
+    },
+    {
+      "pattern": "git push -f",
+      "reason": "Force push shorthand — can destroy remote history"
+    },
+    {
+      "pattern": "curl.*-X POST",
+      "reason": "POST requests require human review before execution"
+    },
+    {
+      "pattern": "curl.*-X PUT",
+      "reason": "PUT requests require human review before execution"
+    },
+    {
+      "pattern": "curl.*-X DELETE",
+      "reason": "DELETE requests require human review before execution"
+    },
+    {
+      "pattern": "eval ",
+      "reason": "Arbitrary code execution via eval is a security risk"
+    },
+    {
+      "pattern": "exec ",
+      "reason": "Arbitrary process replacement via exec is a security risk"
+    },
+    {
+      "pattern": "pip install",
+      "reason": "Use uv instead of pip for Python package management"
+    },
+    {
+      "pattern": "npm install -g",
+      "reason": "Global npm installs can affect the host system unpredictably"
+    },
+    {
+      "pattern": "sudo",
+      "reason": "Elevated privileges are never appropriate for an agent"
+    },
+    {
+      "pattern": "ssh ",
+      "reason": "Remote shell access is not permitted — use APIs and tools"
+    },
+    {
+      "pattern": "scp ",
+      "reason": "Remote file copy is not permitted — use APIs and tools"
+    },
+    {
+      "pattern": "wget",
+      "reason": "Use curl instead of wget for consistency and auditability"
     }
   ],
+
+  "self_modification_prevention": {
+    "description": "The agent cannot modify its own configuration files. This is enforced at the prompt level, in exec-approvals, and via read-only filesystem mounts in production.",
+    "protected_paths": [
+      "/config",
+      "/config/*",
+      "platform/exec-approvals.json",
+      "platform/base-config.yaml"
+    ],
+    "mechanic_request_path": "/workspace/mechanic-requests/",
+    "note": "If the agent needs config changes, it writes a request to the mechanic-requests directory for human review."
+  },
 
   "enforcement": {
     "default_policy": "deny",
     "log_blocked_attempts": true,
-    "notify_on_block": true
+    "notify_on_block": true,
+    "audit_all_commands": true
   }
 }

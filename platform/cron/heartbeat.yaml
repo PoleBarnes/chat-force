@@ -1,0 +1,37 @@
+# Heartbeat Configuration
+# Every project channel has a heartbeat that fires on schedule.
+# On each heartbeat, Leo checks:
+#   1. Can I work without human input? → Do it, post status
+#   2. Am I blocked? → Send actionable notification with options/buttons
+#   3. Nothing to do? → Report status, ready for new work
+#   4. Anything changed since last check? → Process immediately
+
+heartbeat:
+  default_interval: "0 */2 * * *"  # Every 2 hours
+  business_hours_only: true
+  business_hours:
+    start: "08:00"
+    end: "18:00"
+    days: ["mon", "tue", "wed", "thu", "fri"]
+
+  # What to check on each heartbeat
+  checks:
+    - id: pending_work
+      description: "Check for tasks I can progress without human input"
+      action: "progress_autonomously"
+    - id: blocked_items
+      description: "Check for items blocked on human decisions"
+      action: "surface_with_options"
+      notification_style: "actionable"  # Not "I'm stuck" but specific options with buttons
+    - id: new_messages
+      description: "Check for unprocessed messages since last heartbeat"
+      action: "process_immediately"
+    - id: status_report
+      description: "Report current status if nothing else to do"
+      action: "post_status_summary"
+
+  # Anti-spam rules
+  dedup:
+    - "Don't re-notify on the same block if already waiting for response"
+    - "Don't post empty status reports ('nothing to report')"
+    - "Combine multiple small updates into one message"

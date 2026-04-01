@@ -38,9 +38,31 @@ circuit_breakers:
   consecutive_error_limit: 3
   daily_deploy_limit: 5
 
-skills: []
-  # Shared skills are registered here and available to all workspaces (opt-in)
-  # Example:
-  # - name: "ad-campaign-builder"
-  #   enabled_by_default: false
-  #   description: "Creates and deploys ad campaigns to Meta Ads"
+skills:
+  - name: ad-campaign-research
+    enabled_by_default: true
+    description: "Research phase for ad campaigns — discover market desire and develop validated campaign concepts"
+
+  - name: ad-campaign-generate
+    enabled_by_default: true
+    description: "Generation phase for ad campaigns — produce complete multi-channel campaign package from approved concept"
+
+  - name: code-review
+    enabled_by_default: true
+    description: "Analyze pull requests for correctness, security, performance, and readability"
+
+  - name: pr-creation
+    enabled_by_default: true
+    description: "Create well-structured pull requests with clear descriptions and testing instructions"
+
+  - name: research
+    enabled_by_default: true
+    description: "General web research methodology — search, extract, synthesize, and cite"
+
+  - name: morning-briefing
+    enabled_by_default: true
+    description: "Daily status briefing — blocked items, approvals, overnight work, upcoming tasks, system health"
+
+  - name: sop-detection
+    enabled_by_default: true
+    description: "Monitor for repeating task patterns and propose formalizing as SOPs"

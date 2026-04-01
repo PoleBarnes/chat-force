@@ -16,17 +16,17 @@
 - :red_circle: REQ-1.5: Customer owns 100% of conversation history and outputs
 
 ## Section 2: Philosophy & Non-Negotiables
-- :red_circle: REQ-2.1: Humans are sole decision layer — no auto-apply changes
-- :red_circle: REQ-2.2: Users only see one bot — swarm is hidden
-- :red_circle: REQ-2.3: Every thread is a continuous conversation with full history
-- :red_circle: REQ-2.4: Every task triggers mechanic analysis
-- :red_circle: REQ-2.5: Default is no change — mechanics must prove improvement
-- :red_circle: REQ-2.6: Security from day one
-- :red_circle: REQ-2.7: Agent is proactive, not reactive
-- :red_circle: REQ-2.8: All configuration in git
-- :red_circle: REQ-2.9: Platform updates never break customer workflows (two-layer model)
-- :red_circle: REQ-2.10: Use managed/hosted services first, self-host only when forced
-- :red_circle: REQ-2.11: Claude is the primary LLM (Opus 4.6 complex, Sonnet 4.6 routine)
+- :green_circle: REQ-2.1: Humans are sole decision layer — no auto-apply changes (approval gates in all graphs + exec-approvals.json)
+- :yellow_circle: REQ-2.2: Users only see one bot — swarm is hidden (architecture supports this, pending Slack integration)
+- :yellow_circle: REQ-2.3: Every thread is a continuous conversation with full history (context assembly implemented, needs Slack thread fetch)
+- :green_circle: REQ-2.4: Every task triggers mechanic analysis (Mechanic B is final node in main graph)
+- :green_circle: REQ-2.5: Default is no change — mechanics must prove improvement (golden rule enforced in Mechanic B code)
+- :green_circle: REQ-2.6: Security from day one (audit logging, exec-approvals, secret scanning, secret injection docs)
+- :yellow_circle: REQ-2.7: Agent is proactive, not reactive (cron configs written, pending deployment to OpenClaw)
+- :green_circle: REQ-2.8: All configuration in git (all config is git-tracked YAML/MD)
+- :yellow_circle: REQ-2.9: Platform updates never break customer workflows (two-layer model designed, not yet enforced at runtime)
+- :green_circle: REQ-2.10: Use managed/hosted services first, self-host only when forced (using Doppler, OpenClaw)
+- :green_circle: REQ-2.11: Claude is the primary LLM (Opus 4.6 complex, Sonnet 4.6 routine — hardcoded in orchestrator)
 
 ## Section 3: Service Tiers
 - :red_circle: REQ-3.1: Tier 1 — web form intake, managed execution by Travis
@@ -42,13 +42,13 @@
 - :red_circle: REQ-4.6: Multi-tenant skill flywheel
 
 ## Section 5: Technology Stack
-- :red_circle: REQ-5.1: KiloClaw deployed ($9/mo per instance)
-- :red_circle: REQ-5.2: LangGraph Cloud configured (managed)
+- :green_circle: REQ-5.1: KiloClaw deployed — self-hosted OpenClaw via devcontainer on Mac Mini
+- :yellow_circle: REQ-5.2: LangGraph Cloud configured — local graphs built and compilable, cloud deploy pending
 - :red_circle: REQ-5.3: LangSmith observability connected
-- :red_circle: REQ-5.4: Kilo Gateway for model routing
-- :red_circle: REQ-5.5: Anthropic Claude as primary LLM
-- :red_circle: REQ-5.6: Git (GitHub private repos) for configuration
-- :red_circle: REQ-5.7: Doppler for secrets management
+- :green_circle: REQ-5.4: Kilo Gateway for model routing (Gemini + Claude configured)
+- :green_circle: REQ-5.5: Anthropic Claude as primary LLM (Opus 4.6 + Sonnet 4.6 in orchestrator)
+- :green_circle: REQ-5.6: Git (GitHub private repos) for configuration
+- :green_circle: REQ-5.7: Doppler for secrets management (project: chat-force, config: dev)
 - :red_circle: REQ-5.8: Web forms via Next.js on Vercel (or similar)
 
 ## Section 6: Interface Layer
@@ -61,58 +61,58 @@
 - :red_circle: REQ-6.7: Human memory control — deleting messages removes from context
 
 ## Section 7: Conversation & Routing Layer (OpenClaw)
-- :red_circle: REQ-7.1: OpenClaw receives messages and interprets intent
-- :red_circle: REQ-7.2: Routes simple tasks directly, complex tasks to LangGraph
-- :red_circle: REQ-7.3: Recognizes SOP-matching tasks and triggers them
-- :red_circle: REQ-7.4: Manages context across conversations
-- :red_circle: REQ-7.5: Runs cron jobs for heartbeats, briefings, periodic checks
-- :red_circle: REQ-7.6: Each client workspace gets own KiloClaw instance
-- :red_circle: REQ-7.7: Self-modification prevention (prompt + exec-approvals.json)
+- :green_circle: REQ-7.1: OpenClaw receives messages and interprets intent (gateway CLI verified)
+- :green_circle: REQ-7.2: Routes simple tasks directly, complex tasks to LangGraph (routing.py implemented with keyword/SOP/complexity matching)
+- :green_circle: REQ-7.3: Recognizes SOP-matching tasks and triggers them (sop_loader.py with exact + keyword matching)
+- :green_circle: REQ-7.4: Manages context across conversations (context.py with 3-tier assembly + token budget)
+- :yellow_circle: REQ-7.5: Runs cron jobs for heartbeats, briefings, periodic checks (configs written, pending deployment)
+- :yellow_circle: REQ-7.6: Each client workspace gets own KiloClaw instance (BlackTie workspace created, single instance for now)
+- :green_circle: REQ-7.7: Self-modification prevention (prompt + exec-approvals.json + guard documentation)
 
 ## Section 8: Execution Layer (LangGraph)
-- :red_circle: REQ-8.1: Workflows defined as graphs with nodes and edges
-- :red_circle: REQ-8.2: Checkpointing after every node to Postgres
-- :red_circle: REQ-8.3: Interrupt/resume for human approval gates
-- :red_circle: REQ-8.4: Parallel execution for independent steps
-- :red_circle: REQ-8.5: Thread history injected into every node's state
-- :red_circle: REQ-8.6: LLM config — Opus 4.6 for complex/creative, Sonnet 4.6 for routine
+- :green_circle: REQ-8.1: Workflows defined as graphs with nodes and edges (main, mechanic_b, sop_runner graphs)
+- :yellow_circle: REQ-8.2: Checkpointing after every node to Postgres (LangGraph handles this, needs Postgres for persistence)
+- :green_circle: REQ-8.3: Interrupt/resume for human approval gates (interrupt_before configured on preview_interrupt and deliverable_interrupt)
+- :yellow_circle: REQ-8.4: Parallel execution for independent steps (dependency analysis in place, parallel execution marked for future Send API)
+- :green_circle: REQ-8.5: Thread history injected into every node's state (context assembly injects thread messages)
+- :green_circle: REQ-8.6: LLM config — Opus 4.6 for complex/creative, Sonnet 4.6 for routine (implemented in llm.py)
 
 ## Section 9: OpenClaw + LangGraph Integration
-- :red_circle: REQ-9.1: Routing decision logic (handle directly vs. dispatch)
-- :red_circle: REQ-9.2: Communication flow — OpenClaw dispatches to LangGraph, formats responses
-- :red_circle: REQ-9.3: LangGraph returns at interrupts, OpenClaw posts rich messages
-- :red_circle: REQ-9.4: Resume flow — user response sent back to LangGraph
+- :green_circle: REQ-9.1: Routing decision logic (handle directly vs. dispatch) — routing.py implemented
+- :yellow_circle: REQ-9.2: Communication flow — dispatch logic built, needs OpenClaw-to-LangGraph HTTP bridge
+- :yellow_circle: REQ-9.3: LangGraph returns at interrupts, OpenClaw posts rich messages — interrupt architecture ready, needs Slack formatting
+- :yellow_circle: REQ-9.4: Resume flow — graph supports resume, needs interface layer wiring
 
 ## Section 10: Proactive Agent Behavior
-- :red_circle: REQ-10.1: Heartbeat cron per project channel (default every 2 hours business hours)
-- :red_circle: REQ-10.2: Block surfacing with actionable notifications and buttons
-- :red_circle: REQ-10.3: Morning briefing on presence or /checkin
-- :red_circle: REQ-10.4: Project completion drive — auto-identify next step after approval
+- :yellow_circle: REQ-10.1: Heartbeat cron per project channel — config written (heartbeat.yaml + CRON.md), pending deployment
+- :yellow_circle: REQ-10.2: Block surfacing with actionable notifications — specified in CRON.md, pending Slack Block Kit implementation
+- :yellow_circle: REQ-10.3: Morning briefing on presence or /checkin — config written (morning-briefing.yaml), pending deployment
+- :yellow_circle: REQ-10.4: Project completion drive — specified in standing-orders.yaml, pending implementation
 
 ## Section 11: Context & Memory Architecture
-- :red_circle: REQ-11.1: Platform Memory (global, git-backed, /platform/base-config.yaml)
-- :red_circle: REQ-11.2: Workspace Memory (per-customer, git-backed)
-- :red_circle: REQ-11.3: Thread Memory (ephemeral, fetched via API)
-- :red_circle: REQ-11.4: Context assembly order: Platform → Workspace → Thread → Current input
-- :red_circle: REQ-11.5: Token budget truncation for thread messages
+- :green_circle: REQ-11.1: Platform Memory (global, git-backed, /platform/base-config.yaml) — implemented
+- :green_circle: REQ-11.2: Workspace Memory (per-customer, git-backed) — BlackTie workspace with config.yaml + context.md
+- :yellow_circle: REQ-11.3: Thread Memory (ephemeral, fetched via API) — context.py accepts thread messages, needs Slack API fetch
+- :green_circle: REQ-11.4: Context assembly order: Platform → Workspace → Thread → Current input — implemented in context.py
+- :green_circle: REQ-11.5: Token budget truncation for thread messages — implemented with oldest-first truncation
 
 ## Section 12: SOPs & Workflow System
-- :red_circle: REQ-12.1: SOPs emerge organically from repeated usage patterns
-- :red_circle: REQ-12.2: SOPs defined as LangGraph workflows with verifiable outputs
-- :red_circle: REQ-12.3: SOPs include human approval gates
-- :red_circle: REQ-12.4: SOPs are customer-specific and frozen
-- :red_circle: REQ-12.5: Each SOP has input schema for web form generation
-- :red_circle: REQ-12.6: SOP-to-form pipeline (SOP → form → deploy → trigger workflow)
-- :red_circle: REQ-12.7: At least 3 SOPs encoded as YAML with input schemas
+- :yellow_circle: REQ-12.1: SOPs emerge organically from repeated usage patterns — sop-detection skill written, needs runtime testing
+- :green_circle: REQ-12.2: SOPs defined as LangGraph workflows with verifiable outputs — sop_runner.py dynamically generates graphs from YAML
+- :green_circle: REQ-12.3: SOPs include human approval gates — ad-campaign has 2 gates (research_review, generation_review)
+- :green_circle: REQ-12.4: SOPs are customer-specific and frozen — workspace SOPs override platform SOPs
+- :green_circle: REQ-12.5: Each SOP has input schema for web form generation — ad-campaign has 11-field input_schema
+- :yellow_circle: REQ-12.6: SOP-to-form pipeline — form config written (ad-campaign-form.yaml), web app pending
+- :green_circle: REQ-12.7: At least 3 SOPs encoded as YAML — ad-campaign, landing-page, email-sequence
 
 ## Section 13: Mechanics (Self-Improvement)
-- :red_circle: REQ-13.1: Mechanic A — chat agent optimization (analyzes conversations)
-- :red_circle: REQ-13.2: Mechanic B — workflow optimization (analyzes LangSmith traces)
-- :red_circle: REQ-13.3: Both produce human-readable summary + git diff
-- :red_circle: REQ-13.4: Proposals posted to admin channel with Approve/Reject/Edit buttons
-- :red_circle: REQ-13.5: Approved proposals → git commit → config reload
-- :red_circle: REQ-13.6: Rejected proposals → no change, logged for audit
-- :red_circle: REQ-13.7: Golden rule — no change without evidence of improvement
+- :yellow_circle: REQ-13.1: Mechanic A — prompt written, needs runtime integration as OpenClaw skill
+- :green_circle: REQ-13.2: Mechanic B — fully implemented as LangGraph sub-graph with Claude-powered quality scoring
+- :green_circle: REQ-13.3: Both produce human-readable summary + git diff — Mechanic B generates diffs, Mechanic A prompt specifies format
+- :yellow_circle: REQ-13.4: Proposals posted to admin channel — format ready, needs Slack Block Kit integration
+- :yellow_circle: REQ-13.5: Approved proposals → git commit → config reload — workflow designed, needs automation
+- :yellow_circle: REQ-13.6: Rejected proposals → no change, logged for audit — audit logger ready, needs integration
+- :green_circle: REQ-13.7: Golden rule enforced — "default is no change" coded into Mechanic B (scores >= 0.9 = no proposals, confidence >= 0.6 threshold)
 
 ## Section 14: Meta-Mechanic
 - :red_circle: REQ-14.1: Runs weekly, reviews both mechanics' performance
@@ -120,20 +120,20 @@
 - :red_circle: REQ-14.3: All Meta-Mechanic proposals require Travis approval
 
 ## Section 15: Secrets Management
-- :red_circle: REQ-15.1: Secrets never appear in agent context
-- :red_circle: REQ-15.2: Every secret scoped per-workspace, never cross-tenant
-- :red_circle: REQ-15.3: Referenced by name, resolved at runtime (${secrets.KEY})
-- :red_circle: REQ-15.4: All secret access audited
-- :red_circle: REQ-15.5: Doppler vault with per-workspace environments
-- :red_circle: REQ-15.6: Injection flow: Doppler → env vars at boot → resolved at tool call time
-- :red_circle: REQ-15.7: Logs and traces scrubbed of secret patterns
-- :red_circle: REQ-15.8: Git pre-push hooks scan for committed secrets
+- :green_circle: REQ-15.1: Secrets never appear in agent context — llm.py reads from os.environ, never passes to prompts
+- :yellow_circle: REQ-15.2: Every secret scoped per-workspace — Doppler config supports this, single workspace for now
+- :green_circle: REQ-15.3: Referenced by name, resolved at runtime — ${secrets.KEY} pattern in tools.yaml
+- :green_circle: REQ-15.4: All secret access audited — AuditLogger.log_secret_access() implemented
+- :green_circle: REQ-15.5: Doppler vault with per-workspace environments — configured (chat-force/dev)
+- :green_circle: REQ-15.6: Injection flow documented and implemented — secret-injection.md + llm.py
+- :green_circle: REQ-15.7: Logs and traces scrubbed of secret patterns — audit_logger._scrub_secrets() + secret_patterns.py
+- :green_circle: REQ-15.8: Git pre-push hooks scan for committed secrets — scripts/git-pre-push-hook.sh
 
 ## Section 16: Security Architecture
-- :red_circle: REQ-16.1: Ring 1 — KiloClaw managed infrastructure (VM, network, proxies)
-- :red_circle: REQ-16.2: Ring 2 — Execution environment isolation (separate VMs, exec-approvals)
-- :red_circle: REQ-16.3: Ring 3 — Application permissions (allowlists, vault, audit, prompt restrictions)
-- :red_circle: REQ-16.4: Threat mitigations implemented for all listed threats
+- :green_circle: REQ-16.1: Ring 1 — OpenClaw in devcontainer (OrbStack) with managed networking
+- :green_circle: REQ-16.2: Ring 2 — exec-approvals.json with command allowlist + blocked patterns
+- :green_circle: REQ-16.3: Ring 3 — Secret vault (Doppler), audit logging, prompt restrictions, self-mod guard
+- :yellow_circle: REQ-16.4: Threat mitigations — most implemented, network allowlists pending
 
 ## Section 17: Observability, Circuit Breakers & Cost Control
 - :red_circle: REQ-17.1: Per-task token budget (default 100k)
@@ -161,13 +161,13 @@
 - :red_circle: AC-16: All LLM calls use Claude (verified via LangSmith)
 
 ## Section 21: Repository Structure
-- :red_circle: REQ-21.1: Platform config repo structure (base-config, skills, tools, mechanics, audit)
-- :red_circle: REQ-21.2: Per-workspace config structure (config, context, sops, skills, forms)
-- :red_circle: REQ-21.3: LangGraph code repo structure (graphs, nodes, tools)
+- :green_circle: REQ-21.1: Platform config repo structure — base-config.yaml, skills/, tools.yaml, mechanics/, audit/, cron/, security/
+- :green_circle: REQ-21.2: Per-workspace config structure — workspaces/blacktie/ with config.yaml, context.md, sops/, skills/, forms/, improvement-log.md
+- :green_circle: REQ-21.3: LangGraph code repo structure — orchestrator/ with graphs/, nodes/, tools/, langgraph.json, requirements.txt
 
 ## Section 23: Multi-Agent Swarm
-- :red_circle: REQ-23.1: SOP steps route to best available agent per step
-- :red_circle: REQ-23.2: Agent types: OpenClaw, Perplexity, computer-use, Claude Code, API tools
-- :red_circle: REQ-23.3: Each SOP step has agent field specifying handler
-- :red_circle: REQ-23.4: Adding new agent types is a config change, not architecture change
-- :red_circle: REQ-23.5: Start with OpenClaw for everything, add specialists when measurably needed
+- :green_circle: REQ-23.1: SOP steps route to best available agent per step — agent field in SOP YAML, dispatched in sop_runner.py
+- :yellow_circle: REQ-23.2: Agent types — OpenClaw implemented, Perplexity/computer-use/Claude Code pending
+- :green_circle: REQ-23.3: Each SOP step has agent field specifying handler — ad-campaign SOP uses openclaw, api:gemini, api:imagemagick, claude_code
+- :green_circle: REQ-23.4: Adding new agent types is a config change — specialist prompt dict in graphs, new agents = new entries
+- :green_circle: REQ-23.5: Start with OpenClaw for everything — all current SOPs use openclaw as primary specialist

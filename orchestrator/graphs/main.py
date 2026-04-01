@@ -12,11 +12,19 @@ This graph handles the full lifecycle of a user task:
 
 from __future__ import annotations
 
+import logging
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
+
+from ..nodes.context import assemble_context
+from ..nodes.llm import call_claude, call_claude_structured
+from ..nodes.routing import should_dispatch
+from ..nodes.sop_loader import load_sop, match_sop
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +60,7 @@ class GraphState(BaseModel):
     workspace_id: str = ""
 
     # -- Context --
-    matched_sop: str | None = None
+    matched_sop: Optional[str] = None
     context: dict[str, Any] = Field(default_factory=dict)
 
     # -- Planning --
@@ -78,142 +86,484 @@ class GraphState(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Node implementations (placeholders)
+# Specialist system prompts
+# ---------------------------------------------------------------------------
+
+_SPECIALIST_PROMPTS: dict[str, str] = {
+    "researcher": (
+        "You are a research specialist. Gather comprehensive, accurate information "
+        "on the given topic. Cite sources where possible. Focus on facts, data, and "
+        "actionable insights rather than opinions."
+    ),
+    "writer": (
+        "You are a professional writer. Produce clear, engaging, well-structured "
+        "content. Match the requested tone and audience. Ensure strong headlines, "
+        "logical flow, and a clear call to action where appropriate."
+    ),
+    "editor": (
+        "You are an editorial specialist. Polish the provided content for grammar, "
+        "clarity, consistency, and tone. Preserve the author's voice while improving "
+        "readability. Flag any factual claims that need verification."
+    ),
+    "analyst": (
+        "You are a data analyst. Examine the provided data or situation, identify "
+        "patterns and insights, and present findings in a clear, structured format "
+        "with supporting evidence."
+    ),
+    "strategist": (
+        "You are a marketing/business strategist. Develop actionable strategies "
+        "based on market analysis, competitive landscape, and business objectives. "
+        "Provide specific, measurable recommendations."
+    ),
+    "developer": (
+        "You are a software development specialist. Write clean, well-documented "
+        "code. Follow best practices for the relevant language/framework. Include "
+        "error handling and consider edge cases."
+    ),
+    "general": (
+        "You are a capable assistant. Complete the assigned task thoroughly and "
+        "accurately. If the task requires specialized knowledge, apply best practices "
+        "from the relevant domain."
+    ),
+}
+
+
+def _get_specialist_prompt(specialist: str) -> str:
+    """Return the system prompt for a specialist, falling back to 'general'."""
+    return _SPECIALIST_PROMPTS.get(specialist, _SPECIALIST_PROMPTS["general"])
+
+
+# ---------------------------------------------------------------------------
+# Node implementations
 # ---------------------------------------------------------------------------
 
 def entry_node(state: GraphState) -> dict[str, Any]:
-    """Parse the user's input, load workspace/thread context, and match an SOP.
+    """Parse the user's input, load workspace/thread context, and match an SOP."""
+    workspace_id = state.workspace_id or "default"
+    errors: list[str] = []
 
-    TODO: Implement the following:
-      - Fetch thread history from the interface layer
-      - Assemble context (Platform -> Workspace -> Thread -> Current input)
-      - Match input against registered SOPs (exact match, then fuzzy)
-      - If an SOP matches, set matched_sop so planner_node can use it
-      - Apply token-budget truncation for context
-    """
+    # Assemble context from all three tiers
+    try:
+        assembled = assemble_context(
+            workspace_id=workspace_id,
+            thread_messages=state.context.get("thread_messages", []),
+            current_input=state.raw_input,
+            token_budget=100_000,
+        )
+    except Exception as exc:
+        logger.error("Context assembly failed: %s", exc)
+        assembled = state.raw_input
+        errors.append(f"Context assembly error: {exc}")
+
+    # Match against registered SOPs
+    matched_sop: Optional[str] = None
+    try:
+        matched_sop = match_sop(state.raw_input, workspace_id)
+    except Exception as exc:
+        logger.error("SOP matching failed: %s", exc)
+        errors.append(f"SOP matching error: {exc}")
+
     return {
         "status": TaskStatus.PLANNING,
-        "context": {"source": "placeholder"},
-        "matched_sop": None,
+        "context": {
+            "assembled": assembled,
+            "thread_messages": state.context.get("thread_messages", []),
+        },
+        "matched_sop": matched_sop,
+        "errors": state.errors + errors,
     }
 
 
 def planner_node(state: GraphState) -> dict[str, Any]:
     """Create a task breakdown (plan) for the incoming request.
 
-    TODO: Implement the following:
-      - If an SOP was matched, load its YAML and generate steps from it
-      - Otherwise, use Claude (Opus for complex, Sonnet for routine) to
-        decompose the task into ordered steps with specialist assignments
-      - Identify parallelisable steps via dependency analysis
-      - Produce a list[TaskStep] representing the plan
+    If an SOP was matched, loads its steps directly. Otherwise, uses Claude
+    to decompose the task into ordered steps with specialist assignments.
     """
-    placeholder_plan = [
-        TaskStep(id="step-1", description="Placeholder step", specialist="general"),
-    ]
+    workspace_id = state.workspace_id or "default"
+    errors: list[str] = []
+
+    # Path A: SOP-driven plan
+    if state.matched_sop:
+        try:
+            sop = load_sop(workspace_id, state.matched_sop)
+            steps = sop.get("steps", [])
+            plan = []
+            for i, step_def in enumerate(steps):
+                step_type = step_def.get("type", "task")
+                if step_type == "human_approval":
+                    # Approval gates become steps with a special specialist marker
+                    plan.append(TaskStep(
+                        id=step_def.get("id", f"step-{i+1}"),
+                        description=step_def.get("description", ""),
+                        specialist="human_approval",
+                        depends_on=step_def.get("depends_on", []),
+                    ))
+                else:
+                    specialist = step_def.get("agent", step_def.get("specialist", "general"))
+                    # Normalize "openclaw" agent to "general" specialist
+                    if specialist == "openclaw":
+                        specialist = "general"
+                    plan.append(TaskStep(
+                        id=step_def.get("id", f"step-{i+1}"),
+                        description=step_def.get("description", ""),
+                        specialist=specialist,
+                        depends_on=step_def.get("depends_on", []),
+                    ))
+
+            return {
+                "status": TaskStatus.AWAITING_PLAN_APPROVAL,
+                "plan": plan,
+                "errors": state.errors + errors,
+            }
+        except FileNotFoundError:
+            logger.warning("Matched SOP '%s' not found, falling back to LLM planning", state.matched_sop)
+            errors.append(f"SOP '{state.matched_sop}' not found; using LLM planning.")
+        except Exception as exc:
+            logger.error("SOP loading failed: %s", exc)
+            errors.append(f"SOP loading error: {exc}")
+
+    # Path B: LLM-driven planning
+    context_text = state.context.get("assembled", state.raw_input)
+
+    planning_prompt = f"""Analyze this task and break it down into concrete, actionable steps.
+
+Task: {state.raw_input}
+
+Context:
+{context_text}
+
+For each step, provide:
+- id: A short kebab-case identifier (e.g. "research-topic", "draft-copy")
+- description: What this step accomplishes
+- specialist: One of: researcher, writer, editor, analyst, strategist, developer, general
+- depends_on: List of step IDs that must complete before this one (empty list if none)
+
+Order the steps logically. Identify which steps can run in parallel (no dependencies on each other).
+Aim for 3-7 steps for most tasks. Be specific and actionable, not vague.
+
+Return your answer as a JSON object with a single key "steps" containing an array of step objects."""
+
+    plan_schema = {
+        "type": "object",
+        "properties": {
+            "steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "description": {"type": "string"},
+                        "specialist": {"type": "string"},
+                        "depends_on": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["id", "description", "specialist"],
+                },
+            },
+        },
+        "required": ["steps"],
+    }
+
+    try:
+        result = call_claude_structured(
+            prompt=planning_prompt,
+            system=(
+                "You are a task planning specialist. Break down tasks into clear, "
+                "ordered steps that can be executed by specialist agents. "
+                "Be thorough but efficient — avoid unnecessary steps."
+            ),
+            response_schema=plan_schema,
+            model="claude-sonnet-4-6",
+            temperature=0.0,
+        )
+        plan = [
+            TaskStep(
+                id=s["id"],
+                description=s["description"],
+                specialist=s.get("specialist", "general"),
+                depends_on=s.get("depends_on", []),
+            )
+            for s in result.get("steps", [])
+        ]
+    except Exception as exc:
+        logger.error("LLM planning failed: %s", exc)
+        errors.append(f"Planning error: {exc}")
+        plan = [
+            TaskStep(
+                id="fallback-step",
+                description=f"Complete the task: {state.raw_input}",
+                specialist="general",
+            ),
+        ]
+
     return {
         "status": TaskStatus.AWAITING_PLAN_APPROVAL,
-        "plan": placeholder_plan,
+        "plan": plan,
+        "errors": state.errors + errors,
     }
 
 
 def preview_interrupt(state: GraphState) -> dict[str, Any]:
     """Show the plan to the human and wait for approval.
 
-    This node is configured with interrupt_before so the graph pauses
-    *before* entering it, giving the interface layer time to render the
-    plan and collect Approve / Reject / Edit feedback.
+    This node is configured with ``interrupt_before`` so the graph pauses
+    *before* entering it. The interface layer reads the current state (which
+    contains the plan), renders it for the user, and resumes the graph with
+    ``plan_approved`` set to ``True`` (or ``False`` for rejection).
 
-    TODO: Implement the following:
-      - Format the plan into a rich Slack Block Kit / Google Chat Card message
-      - On rejection, route back to planner_node with feedback
-      - On edit, merge edits into the plan and re-present
+    When the graph resumes into this node, we read the decision.
     """
+    # Format the plan into a structured preview dict that the interface
+    # layer can render (Slack Block Kit, Google Chat card, etc.)
+    plan_preview = {
+        "title": "Task Plan",
+        "steps": [
+            {
+                "id": step.id,
+                "description": step.description,
+                "specialist": step.specialist,
+                "depends_on": step.depends_on,
+            }
+            for step in state.plan
+        ],
+        "total_steps": len(state.plan),
+        "has_approval_gates": any(
+            s.specialist == "human_approval" for s in state.plan
+        ),
+    }
+
+    # The plan_approved field is set by the interface layer when it resumes
+    # the graph. We pass through whatever value is in state.
     return {
-        "plan_approved": True,
-        "status": TaskStatus.EXECUTING,
+        "context": {
+            **state.context,
+            "plan_preview": plan_preview,
+        },
+        "plan_approved": state.plan_approved,
+        "status": (
+            TaskStatus.EXECUTING
+            if state.plan_approved
+            else TaskStatus.PLANNING
+        ),
     }
 
 
 def execution_node(state: GraphState) -> dict[str, Any]:
-    """Execute the approved plan — fan out to specialists.
+    """Execute the approved plan by dispatching each step to a specialist.
 
-    TODO: Implement the following:
-      - For each step in the plan, dispatch to the appropriate specialist
-        sub-graph or tool
-      - Run independent steps in parallel (LangGraph Send API)
-      - Run dependent steps sequentially, injecting prior results
-      - Collect results and surface any errors
-      - Checkpoint after every step (LangGraph handles this automatically)
+    Steps are executed in dependency order. Steps with no unresolved
+    dependencies could be parallelised (future enhancement with LangGraph
+    Send API), but for now they run sequentially for reliability.
     """
     results: dict[str, Any] = {}
     deliverables: list[dict[str, Any]] = []
+    errors: list[str] = list(state.errors)
+    context_text = state.context.get("assembled", state.raw_input)
+
+    # Build a lookup of completed step results for dependency injection
+    completed: dict[str, str] = {}
+
     for step in state.plan:
-        results[step.id] = {"status": "completed", "output": "placeholder"}
-        deliverables.append({"step_id": step.id, "content": "placeholder deliverable"})
+        # Skip human approval gates — they are handled by the interrupt system
+        if step.specialist == "human_approval":
+            results[step.id] = {"status": "skipped", "output": "Approval gate (handled by interrupt)"}
+            continue
+
+        # Gather results from dependencies
+        dependency_context = ""
+        for dep_id in step.depends_on:
+            dep_output = completed.get(dep_id, "")
+            if dep_output:
+                dependency_context += f"\n\n### Results from '{dep_id}':\n{dep_output}"
+
+        # Build the specialist prompt
+        specialist_system = _get_specialist_prompt(step.specialist)
+        step_prompt = f"""Execute the following task step:
+
+## Step: {step.id}
+{step.description}
+
+## Overall Task
+{state.raw_input}
+
+## Context
+{context_text}
+{dependency_context if dependency_context else ""}
+
+Produce a thorough, complete deliverable for this step. Be specific and actionable."""
+
+        try:
+            # Use Sonnet for routine steps, Opus for complex specialist work
+            model = "claude-sonnet-4-6"
+            if step.specialist in ("strategist", "analyst", "developer"):
+                model = "claude-opus-4-6"
+
+            output = call_claude(
+                prompt=step_prompt,
+                system=specialist_system,
+                model=model,
+                temperature=0.0,
+                max_tokens=4096,
+            )
+            results[step.id] = {"status": "completed", "output": output}
+            completed[step.id] = output
+            deliverables.append({
+                "step_id": step.id,
+                "specialist": step.specialist,
+                "content": output,
+            })
+        except Exception as exc:
+            error_msg = f"Step '{step.id}' failed: {exc}"
+            logger.error(error_msg)
+            errors.append(error_msg)
+            results[step.id] = {"status": "error", "error": str(exc)}
+            completed[step.id] = f"[ERROR: {exc}]"
 
     return {
         "execution_results": results,
         "deliverables": deliverables,
         "status": TaskStatus.AWAITING_DELIVERABLE_REVIEW,
+        "errors": errors,
     }
 
 
 def deliverable_interrupt(state: GraphState) -> dict[str, Any]:
     """Show deliverables to the human for review.
 
-    This node is configured with interrupt_before so the graph pauses
-    *before* entering it, letting the interface layer present deliverables
-    and collect Approve / Reject / Re-run feedback.
-
-    TODO: Implement the following:
-      - Format deliverables into reviewable messages
-      - On rejection, route back to execution_node with feedback
-      - On re-run, allow selective step re-execution
+    Like ``preview_interrupt``, this node is configured with
+    ``interrupt_before``. The interface layer renders the deliverables and
+    collects feedback, then resumes the graph with ``deliverables_approved``.
     """
+    # Build a review-friendly summary
+    deliverable_summary = {
+        "title": "Deliverables for Review",
+        "items": [
+            {
+                "step_id": d["step_id"],
+                "specialist": d.get("specialist", ""),
+                "content_preview": d["content"][:500] + ("..." if len(d["content"]) > 500 else ""),
+                "content_length": len(d["content"]),
+            }
+            for d in state.deliverables
+        ],
+        "total_items": len(state.deliverables),
+        "errors": [
+            step_id
+            for step_id, result in state.execution_results.items()
+            if result.get("status") == "error"
+        ],
+    }
+
     return {
-        "deliverables_approved": True,
-        "status": TaskStatus.FINALIZING,
+        "context": {
+            **state.context,
+            "deliverable_summary": deliverable_summary,
+        },
+        "deliverables_approved": state.deliverables_approved,
+        "status": (
+            TaskStatus.FINALIZING
+            if state.deliverables_approved
+            else TaskStatus.EXECUTING
+        ),
     }
 
 
 def finalization_node(state: GraphState) -> dict[str, Any]:
-    """Package outputs into the final deliverable set.
+    """Package outputs into the final deliverable set with a summary."""
+    errors: list[str] = list(state.errors)
 
-    TODO: Implement the following:
-      - Aggregate deliverables into the expected output format
-      - Generate any summary artifacts (reports, files, links)
-      - Post final output to the originating thread via the interface layer
-      - Update workspace memory with task outcome
-    """
+    # Use Claude to generate a concise summary of all deliverables
+    deliverable_texts = []
+    for d in state.deliverables:
+        deliverable_texts.append(
+            f"### {d['step_id']} ({d.get('specialist', 'general')})\n{d['content']}"
+        )
+    all_deliverables = "\n\n---\n\n".join(deliverable_texts)
+
+    try:
+        summary = call_claude(
+            prompt=f"""Summarize the following task deliverables into a concise executive summary.
+Include: what was accomplished, key findings or outputs, and any next steps.
+
+Original task: {state.raw_input}
+
+Deliverables:
+{all_deliverables}""",
+            system="You are a concise summarizer. Produce a clear 2-4 paragraph summary.",
+            model="claude-sonnet-4-6",
+            temperature=0.0,
+            max_tokens=1024,
+        )
+    except Exception as exc:
+        logger.error("Summary generation failed: %s", exc)
+        summary = f"Task completed with {len(state.deliverables)} deliverables."
+        errors.append(f"Summary generation error: {exc}")
+
     return {
         "final_output": {
-            "summary": "Task completed successfully (placeholder)",
+            "summary": summary,
             "deliverables": state.deliverables,
+            "task": state.raw_input,
+            "workspace_id": state.workspace_id,
+            "matched_sop": state.matched_sop,
+            "step_count": len(state.plan),
+            "error_count": len([
+                r for r in state.execution_results.values()
+                if isinstance(r, dict) and r.get("status") == "error"
+            ]),
         },
         "status": TaskStatus.ANALYZING,
+        "errors": errors,
     }
 
 
 def mechanic_b_node(state: GraphState) -> dict[str, Any]:
-    """Analyze the execution using Mechanic B.
+    """Analyze the execution using the Mechanic B sub-graph.
 
-    This node invokes the Mechanic B sub-graph to review LangSmith traces
-    for the current run and produce improvement proposals.
-
-    TODO: Implement the following:
-      - Collect the LangSmith run/trace ID for this graph execution
-      - Invoke the mechanic_b sub-graph with trace data
-      - Post the Mechanic B report to the admin approvals channel
-      - Include Approve / Reject buttons for each proposal
+    Collects execution metadata and invokes the Mechanic B analysis pipeline
+    to produce quality scores and improvement proposals.
     """
-    return {
-        "mechanic_b_report": {
-            "score": 0.0,
+    from .mechanic_b import graph as mechanic_b_graph
+
+    errors: list[str] = list(state.errors)
+
+    try:
+        # Build input state for Mechanic B
+        mechanic_input = {
+            "run_id": state.thread_id,
+            "trace_id": state.thread_id,
+            "thread_id": state.thread_id,
+            "workspace_id": state.workspace_id,
+            # Pass execution data so Mechanic B can analyze it
+            "trace_data": {
+                "task": state.raw_input,
+                "matched_sop": state.matched_sop,
+                "plan": [s.model_dump() for s in state.plan],
+                "execution_results": state.execution_results,
+                "deliverables": state.deliverables,
+                "errors": state.errors,
+            },
+        }
+
+        result = mechanic_b_graph.invoke(mechanic_input)
+        report = result.get("report", {})
+    except Exception as exc:
+        logger.error("Mechanic B analysis failed: %s", exc)
+        errors.append(f"Mechanic B error: {exc}")
+        report = {
+            "error": str(exc),
+            "summary": "Mechanic B analysis could not be completed.",
+            "quality_scores": {},
             "proposals": [],
-            "summary": "Mechanic B analysis placeholder",
-        },
+        }
+
+    return {
+        "mechanic_b_report": report,
         "status": TaskStatus.COMPLETE,
+        "errors": errors,
     }
 
 
@@ -224,7 +574,8 @@ def mechanic_b_node(state: GraphState) -> dict[str, Any]:
 def after_preview(state: GraphState) -> str:
     """Route after the plan preview interrupt.
 
-    TODO: Handle rejection -> route back to planner_node.
+    If the human rejected the plan, route back to planner_node so Claude
+    can revise based on the feedback stored in context.
     """
     if state.plan_approved:
         return "execution_node"
@@ -234,7 +585,8 @@ def after_preview(state: GraphState) -> str:
 def after_deliverable_review(state: GraphState) -> str:
     """Route after the deliverable review interrupt.
 
-    TODO: Handle rejection -> route back to execution_node.
+    If the human rejected deliverables, route back to execution_node
+    for selective re-execution.
     """
     if state.deliverables_approved:
         return "finalization_node"
