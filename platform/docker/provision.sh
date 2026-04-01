@@ -64,7 +64,7 @@ if ! docker info &>/dev/null; then
 fi
 
 # Check specifically for OrbStack (optional, just informational)
-if docker info 2>&1 | grep -qi orbstack; then
+if docker context show 2>/dev/null | grep -qi orbstack || docker info 2>&1 | grep -qi orbstack; then
   ok "OrbStack is running"
 else
   warn "Docker is running but OrbStack not detected. Continuing anyway."
@@ -100,13 +100,6 @@ if ! command -v jq &>/dev/null; then
 fi
 ok "jq: $(jq --version)"
 
-# Doppler CLI (on the host -- optional, we mainly need it inside the container)
-if command -v doppler &>/dev/null; then
-  ok "Doppler CLI: $(doppler --version 2>/dev/null || echo 'installed')"
-else
-  warn "Doppler CLI not found on host (it is installed inside the container)."
-  warn "If you want to run 'doppler run' on the host, install via: brew install dopplerhq/cli/doppler"
-fi
 
 # ── Step 2: Create workspace ─────────────────────────────────────────────
 
