@@ -1,7 +1,7 @@
 # Engineering Journal — Digital Workforce Platform
 
-## Current Phase: Phase 0 → Phase 1 Transition
-## Current Task: Sprint complete — ready for integration testing
+## Current Phase: Prototype — Self-Improving Agent Loop
+## Current Task: Documentation synthesis, then prototype sprint
 ## Blocked On: Nothing
 
 ---
@@ -57,6 +57,21 @@
 - [ ] Task R.7: Add Mechanic C (Scout) + multi-agent experimentation docs — IN PROGRESS
 - [ ] Task R.8: Fix REQUIREMENTS.md accuracy — TODO
 - [ ] Task R.9: Full test suite re-run and validation — TODO
+
+### Sprint: Review, Fix & Architecture Pivot — 2026-04-02
+- [x] Task P.1: 9-reviewer code review (Architecture, Security, Code Quality, Content, Simplicity, Requirements, Spec Alignment, Codex-mini, GPT-5.4) — DONE
+- [x] Task P.2: Repo restructure — eliminate platform/ stdlib collision, remove workspaces/ — DONE
+- [x] Task P.3: Fix critical bugs (approval gates, DAG wiring) — DONE
+- [x] Task P.4: Fix high issues (context truncation, audit integration, security holes) — DONE
+- [x] Task P.5: Fix remaining highs (skills loading, temperature, agent dispatch, feedback) — DONE
+- [x] Task P.6: Consolidate duplicates, eliminate dead code — DONE
+- [x] Task P.7: Add Mechanic C (Scout) + multi-agent experimentation docs — DONE
+- [x] Task P.8: Fix REQUIREMENTS.md accuracy — DONE
+- [x] Task P.9: Merge sprint/phase0-buildout to main — DONE
+- [x] Task P.10: Research OpenClaw internals (3 agents: architecture, source code, industry patterns) — DONE
+- [x] Task P.11: Analyze TRA-219, TRA-220, TRA-221 — architecture synthesis — DONE
+- [x] Task P.12: Project documentation synthesis — IN PROGRESS
+- [ ] Task P.13: Plan prototype sprint — TODO
 
 ### Phase 1: LangGraph Integration
 - [ ] Task 1.1: Set up LangGraph Cloud + LangSmith — TODO
@@ -152,10 +167,21 @@
 - 2026-04-01: NEW MECHANIC — Mechanic C "The Scout" defined. Daily/weekly research loop that scans for new tools, agents, and techniques. Proposes experiments. Reports integration readiness. Separate from Mechanic A (chat) and B (workflow).
 - 2026-04-01: DESIGN PRINCIPLE — Multi-agent experimentation. Platform designed to plug in and swap different AI systems (Perplexity Computer, OpenClaw, Hermes, Factory Droids, future unknowns). Agent dispatch interface created (orchestrator/nodes/agents.py). Mechanics evaluate which agent performs best per step.
 - 2026-04-01: 9-reviewer code review completed (7 Claude Opus + Codex-mini + GPT-5.4). Found 4 critical bugs, 11 high issues. All being fixed in this sprint.
+- 2026-04-02: ARCHITECTURE PIVOT — Adopted self-improving sandboxed agent model from TRA-219/220/221. Leo runs in disposable Docker containers from tip of main. Two-layer mechanical change capture (git diff + docker diff). Mechanic evaluates changesets → GitHub PRs. Human approves → merge → rebuild → improved.
+- 2026-04-02: CORE PRINCIPLE — No agent self-reporting for observability. All change detection is mechanical and external (git diff + docker diff from host). Agent conversation output used as supplementary signal for Mechanic analysis, but never as primary source of truth.
+- 2026-04-02: MEMORY SYSTEM — Adopting ClawVault as persistent agent memory. Git-backed markdown with frontmatter, wikilinks, hybrid search. Separate git repo with its own PR flow. Agent decides vault organization (most context), Mechanic reviews changes.
+- 2026-04-02: IMMUTABILITY — Dockerfile-as-Code pattern from TRA-221. Entire agent environment in git (Dockerfile + config + skills + requirements). Config mounted read-only at runtime. All changes (config AND environment) go through PRs together.
+- 2026-04-02: ONE AGENT — Leo is the single customer-facing agent. Research and building handled by one agent with skills, not separate agents. Perplexity Computer is a tool Leo dispatches to, not a separate agent. Keep it simple, separate later if needed.
+- 2026-04-02: ORCHESTRATOR = PLUMBING — The Orchestrator is a Python script on the host. No AI reasoning. Just Docker coordination: spin up worker → wait → extract changeset → spin up mechanic → wait → create PR. Triggered by Slack messages (CLI for prototype).
+- 2026-04-02: LANGGRAPH DEFERRED — LangGraph is NOT used for the improvement loop (Orchestrator handles that). Reserved for structured multi-step workflows (ad campaigns with approval gates) — built later when proven needed.
+- 2026-04-02: BARE START — Leo starts with no pre-loaded skills. Just SOUL, IDENTITY, USER, AGENTS. Skills emerge from doing work. The 8 skills already built are reference material for what good skills look like.
+- 2026-04-02: MECHANIC AS OPENCLAW — The Mechanic runs as its own OpenClaw instance with an evaluator persona. Receives changeset bundle as read-only input. Produces structured verdict (approve/reject with evidence, filtered file lists, PR body).
+- 2026-04-02: TWO-LAYER COUPLING — Config changes and environment changes must be coupled in the same PR. A new skill that needs ffmpeg → the PR includes both the skill file AND the Dockerfile/requirements change. TRA-221 insight.
+- 2026-04-02: 9-REVIEWER CODE REVIEW — Completed comprehensive review (7 Claude Opus + Codex-mini + GPT-5.4). Found 4 critical bugs (approval gates skipped, DAG wiring sequential, platform/ stdlib collision, dual load_sop). All fixed. 96 tests passing.
+- 2026-04-02: REQUIREMENTS HONESTY — Review found ~18 of 38 GREEN items were over-claimed. "Code exists in isolation" ≠ "requirement complete." Downgraded to YELLOW with accurate descriptions. Requirements being rewritten from scratch.
 
 ### Questions for Human
 - [PENDING] See Phase 0 questions batch below
 
 ### Blockers
-- [ACTIVE] B1: Need answers to Phase 0 questions before starting work
-- [ACTIVE] B2: Cannot access Linear issue TRA-213 (requires authentication)
+- None currently active
