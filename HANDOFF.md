@@ -64,7 +64,7 @@ You are the **orchestrator**. You do NOT write code yourself. You plan, delegate
 - All config in git — source-controlled, auditable
 - Use `uv run --python 3.13 --with <deps>` for any Python work
 - Test via `openclaw agent` CLI, not Slack
-- Workspace templates live in `platform/docker/config/workspace/` — edit there, then copy to `~/.chat-force/openclaw/platform/docker/config/workspace/` for container access
+- Workspace templates live in `docker/config/workspace/` — edit there, then copy to `~/.chat-force/openclaw/docker/config/workspace/` for container access
 - Travis prefers progressive disclosure, visual diagrams, one question at a time
 - Quality over speed — get the architecture right
 

@@ -1,0 +1,445 @@
+# =============================================================================
+# Ad Campaign SOP — BlackTie Digital Workforce
+# =============================================================================
+# Two-phase workflow: Research (validate hooks) -> Generate (full campaign).
+# Nothing ships without explicit approval at each gate.
+#
+# Runner: orchestrator/graphs/sop_runner.py
+# Reference: tests/fixtures/ad-campaign-workflow.md
+# =============================================================================
+
+name: ad-campaign
+version: 1
+description: >
+  End-to-end ad campaign creation. Phase 1 researches customer pain points,
+  competitor positioning, and emotional triggers to develop validated campaign
+  concepts. Phase 2 generates a complete multi-channel package: ad copy,
+  images, emails, SMS, landing page, and flow diagrams. Both phases end with
+  a human approval gate — nothing ships without review.
+
+# ---------------------------------------------------------------------------
+# Input Schema — used to auto-generate web intake forms
+# ---------------------------------------------------------------------------
+input_schema:
+  product_name:
+    type: string
+    required: true
+    label: Product / Building Name
+    placeholder: "e.g. The Meridian at Downtown"
+    help: The name of the product, property, or service being advertised.
+
+  product_description:
+    type: text
+    required: true
+    label: Product Details
+    placeholder: "Specs, features, pricing, unique selling points..."
+    help: >
+      Full product details the campaign will be built around. Include specs,
+      features, pricing, floor plans, amenities — anything relevant.
+
+  target_audience:
+    type: text
+    required: true
+    label: Target Audience
+    placeholder: "Who are we talking to? Demographics, psychographics, behaviors..."
+    help: >
+      Describe the ideal customer. Include demographics, lifestyle, pain points,
+      aspirations, and what motivates their purchase decision.
+
+  budget_range:
+    type: select
+    required: false
+    label: Monthly Ad Budget
+    options:
+      - "$500-1000"
+      - "$1000-2500"
+      - "$2500-5000"
+      - "$5000+"
+    help: Approximate monthly spend across all platforms.
+
+  tone:
+    type: select
+    required: false
+    label: Brand Tone
+    default: Professional
+    options:
+      - Professional
+      - Casual
+      - Bold
+      - Luxury
+      - Down-to-earth
+    help: The overall voice and personality the campaign should project.
+
+  platforms:
+    type: multiselect
+    required: false
+    label: Target Platforms
+    options:
+      - Facebook
+      - Instagram
+      - Google Display
+      - Email
+      - SMS
+    default: ["Facebook", "Instagram", "Email"]
+    help: Where the campaign will run. Copy and images are tailored per platform.
+
+  existing_positioning:
+    type: text
+    required: false
+    label: Existing Brand Messaging
+    placeholder: "Current tagline, brand guidelines, positioning statements..."
+    help: >
+      Any existing brand messaging, taglines, or positioning we should
+      align with or intentionally depart from.
+
+  reference_images:
+    type: file_upload
+    required: false
+    label: Brand Images / References
+    accept: "image/*"
+    max_files: 10
+    help: Logos, brand photos, mood boards, or reference images.
+
+  special_instructions:
+    type: text
+    required: false
+    label: Special Instructions
+    placeholder: "Anything else we should know..."
+    help: Additional requirements, constraints, or creative direction.
+
+  num_concepts:
+    type: integer
+    required: false
+    label: Number of Concepts
+    default: 3
+    min: 1
+    max: 10
+    help: How many distinct campaign concepts to develop in the research phase.
+
+  previous_campaigns:
+    type: text
+    required: false
+    label: Previous Campaigns
+    placeholder: "Links to or descriptions of past campaigns..."
+    help: >
+      Links or descriptions of previous campaigns. Helps avoid repetition
+      and build on what worked.
+
+# ---------------------------------------------------------------------------
+# Steps — executed in order, with dependency-based parallelism
+# ---------------------------------------------------------------------------
+steps:
+
+  # =========================================================================
+  # Phase 1: Research
+  # =========================================================================
+
+  - id: parse_brief
+    specialist: openclaw
+    description: >
+      Parse the intake form inputs. Extract and structure: product attributes,
+      audience segments, positioning constraints, campaign goals, platform
+      requirements, and budget implications. Produce a normalized brief that
+      all downstream steps consume.
+
+  - id: pain_point_research
+    specialist: openclaw
+    agent: perplexity  # web search agent, when available
+    depends_on: [parse_brief]
+    description: >
+      Search Reddit, forums, Quora, and review sites for real customer
+      language about the problem this product solves. Capture verbatim
+      quotes, recurring themes, and emotional intensity. Minimum 2 research
+      passes. Ground every finding in source URLs.
+    rules:
+      - Use customer language from forums/reviews, not marketing jargon
+      - Include source URLs for every finding
+      - Minimum 2 research passes per source type
+
+  - id: competitor_analysis
+    specialist: openclaw
+    depends_on: [parse_brief]
+    description: >
+      Identify top 3-5 competitors. Fetch and analyze their landing pages,
+      ad copy, hooks, CTAs, and positioning. Note what they do well, where
+      they fall flat, and gaps we can exploit. Capture screenshots and URLs.
+    rules:
+      - Analyze hooks, copy, CTAs, and visual approach
+      - Identify positioning gaps and opportunities
+      - Include competitor URLs and screenshots
+
+  - id: customer_psychology
+    specialist: openclaw
+    depends_on: [parse_brief]
+    description: >
+      Research customer decision stories, objections, emotional triggers,
+      and purchase motivations. Map the awareness spectrum (Unaware through
+      Most Aware) for each audience segment. Identify the dominant emotions
+      at each stage of the buying journey.
+    rules:
+      - Map awareness levels per audience segment
+      - Identify objections and how to address them
+      - Find emotional triggers backed by real research
+
+  - id: hook_generation
+    specialist: openclaw
+    depends_on: [pain_point_research, competitor_analysis, customer_psychology]
+    description: >
+      Synthesize all research into 8-12 raw hooks. Each hook addresses a
+      specific pain point, uses customer language, and has a clear angle
+      (pain, aspiration, social proof, urgency, or curiosity). Refine to
+      the top 5 based on research backing and distinctiveness.
+    rules:
+      - Start with 8-12 raw hooks, refine to top 5
+      - Each hook must be distinct — not variations of the same idea
+      - Rate each hook by research backing (strong/moderate/weak)
+
+  - id: concept_development
+    specialist: openclaw
+    depends_on: [pain_point_research, competitor_analysis, customer_psychology, hook_generation]
+    description: >
+      Develop full campaign concepts from the top hooks. Each concept
+      includes: name, core hook, friction it addresses, target segments,
+      creative direction, platform strategy, and a confidence level
+      (HIGH / MEDIUM / LOW tied to source quality). Produce the number
+      of concepts specified in num_concepts (default 3).
+    output_format:
+      - concept_name: string
+      - hook: string
+      - friction_addressed: string
+      - target_segments: array
+      - creative_direction: text
+      - platform_strategy: object
+      - confidence: enum [HIGH, MEDIUM, LOW]
+      - supporting_research: array of URLs/quotes
+
+  - id: research_review
+    type: approval_gate
+    depends_on: [concept_development]
+    description: >
+      Travis reviews the research concepts. Present using progressive
+      disclosure: recommendation first, then concept cards, then supporting
+      research on demand. Travis selects which concept(s) to move to
+      generation, requests changes, or rejects.
+    presentation:
+      - layer_1: Top recommendation with rationale
+      - layer_2: All concept cards with confidence levels
+      - layer_3: Full supporting research (expandable)
+
+  # =========================================================================
+  # Phase 2: Generation
+  # =========================================================================
+
+  - id: plan_structure
+    specialist: openclaw
+    depends_on: [research_review]
+    description: >
+      Map the approved concept into a full campaign structure. Define how
+      the hook translates per audience segment, plan all deliverables, and
+      diagram the customer journey: ad impression -> click -> landing page
+      -> email drip -> conversion. Specify copy variants needed per
+      platform and segment.
+
+  - id: generate_copy
+    specialist: openclaw
+    depends_on: [plan_structure]
+    description: >
+      Write ad copy variants: minimum 3 per segment per platform. Each
+      variant has a headline, body, and CTA. Vary angles across pain,
+      aspiration, social proof, urgency, and curiosity. Respect platform
+      character limits (Facebook 125 primary / 40 headline, Instagram 2200
+      caption, Google Display 90 long headline / 30 short). The headline
+      gets 80% of the effort.
+    rules:
+      - Minimum 3 variants per segment per platform
+      - Respect platform character limits
+      - The headline is 80% of the ad — invest disproportionate effort
+      - Sell the feeling of the problem being solved, not the product
+      - Be specific: numbers, timeframes, concrete outcomes
+      - Lead with emotion, justify with logic
+
+  - id: generate_images
+    specialist: openclaw
+    agent: api:gemini
+    depends_on: [plan_structure]
+    description: >
+      Create detailed image generation prompts for each ad variant and
+      platform size. Use Gemini (gemini-3.1-flash-image-preview) or
+      Imagen. Save all prompts for surgical edits later. Generate images
+      in platform-native aspect ratios (1:1 for feed, 9:16 for stories,
+      16:9 for display).
+
+  - id: compose_images
+    specialist: openclaw
+    agent: api:imagemagick
+    depends_on: [generate_images]
+    description: >
+      Composite final ad images: add logos, text overlays, CTAs, and
+      brand elements. Create platform-specific sizes: 1080x1080 (feed),
+      1080x1920 (stories), 1200x628 (Facebook link), 300x250 / 728x90
+      (Google Display). Ensure text is legible and brand-consistent.
+
+  - id: build_emails
+    specialist: openclaw
+    depends_on: [generate_copy]
+    description: >
+      Build 5 HTML emails for the drip sequence. Each email is complete
+      HTML with inline CSS, mobile-responsive, and includes A/B subject
+      line variants. Sequence flow:
+        1. Welcome — introduce the value proposition
+        2. Value — deep dive on key benefit with proof
+        3. Social Proof — testimonials, case studies, numbers
+        4. Urgency — time-limited offer or scarcity
+        5. Final CTA — last chance, recap all benefits, clear next step
+    rules:
+      - Complete HTML with inline CSS
+      - Mobile-responsive (max-width 600px)
+      - A/B subject lines for each email
+      - Preheader text for each email
+      - Unsubscribe link placeholder
+
+  - id: build_sms
+    specialist: openclaw
+    depends_on: [generate_copy]
+    description: >
+      Write 3 SMS messages that complement the email sequence. Each
+      message under 160 characters with a clear CTA and tracking link
+      placeholder. Sequence: intro/value -> social proof -> urgency.
+    rules:
+      - Maximum 160 characters per message
+      - Include link placeholder for tracking
+      - Complement (don't duplicate) email messaging
+
+  - id: build_landing_page
+    specialist: claude_code
+    depends_on: [generate_copy, compose_images]
+    description: >
+      Build a standalone HTML landing page. Structure follows the proven
+      conversion flow: hero (headline + CTA) -> problem agitation ->
+      solution/product -> social proof -> objection handling -> final CTA.
+      Must be mobile-responsive, fast-loading, and self-contained (inline
+      CSS/JS, no external dependencies except images).
+    rules:
+      - Standalone HTML — no external CSS/JS dependencies
+      - Mobile-first responsive design
+      - Page structure: hero -> problem -> solution -> proof -> objections -> CTA
+      - Include meta tags for social sharing (OG tags)
+      - Placeholder for tracking pixels
+
+  - id: build_flow_diagrams
+    specialist: openclaw
+    depends_on: [plan_structure]
+    description: >
+      Create Mermaid diagrams showing the complete campaign flow:
+        1. Customer journey map (touchpoint -> touchpoint -> conversion)
+        2. Email drip sequence timeline
+        3. Ad variant matrix (segment x platform x angle)
+        4. Budget allocation recommendation
+
+  - id: verify_output
+    specialist: openclaw
+    depends_on: [generate_copy, compose_images, build_emails, build_sms, build_landing_page, build_flow_diagrams]
+    description: >
+      Run the quality checklist against every deliverable. Flag any issues,
+      inconsistencies, or gaps. Verify messaging consistency across all
+      channels. Produce a verification report with pass/fail per item.
+    quality_gates:
+      - "Does it sell the feeling? Can the reader feel life after?"
+      - "Is it grounded in real desire confirmed by research?"
+      - "Would you stop scrolling for this headline?"
+      - "Is it specific? Numbers, timeframes, concrete outcomes?"
+      - "Is there a clear next step?"
+      - "Is it honest?"
+      - "Messaging consistency across all channels"
+      - "All deliverables complete and formatted correctly"
+      - "Platform-specific requirements met (character limits, image sizes)"
+      - "Brand tone consistent across all touchpoints"
+
+  - id: generation_review
+    type: approval_gate
+    depends_on: [verify_output]
+    description: >
+      Travis reviews the complete campaign package. All deliverables are
+      compiled into a review dashboard. Travis can approve the full
+      package, request revisions to specific deliverables, or reject.
+    presentation:
+      - layer_1: Verification summary (pass/fail)
+      - layer_2: Campaign overview with key metrics
+      - layer_3: Individual deliverables (expandable per channel)
+
+# ---------------------------------------------------------------------------
+# Output Schema — what the SOP produces
+# ---------------------------------------------------------------------------
+output_schema:
+  campaign_concepts:
+    type: array
+    description: >
+      Research concepts with hooks, supporting evidence, and confidence
+      levels. Includes the selected concept and runner-up alternatives.
+
+  ad_copy:
+    type: object
+    description: >
+      Copy variants organized by segment and platform. Each variant
+      includes headline, body, CTA, and the angle used (pain, aspiration,
+      social proof, urgency, curiosity).
+
+  image_prompts:
+    type: array
+    description: >
+      All image generation prompts used, organized by variant and platform.
+      Saved for surgical edits — change one word in the prompt to adjust
+      a specific element without regenerating everything.
+
+  composed_images:
+    type: array
+    description: >
+      Final composited images with logos, overlays, and platform-specific
+      sizing. Organized by platform and variant.
+
+  email_sequence:
+    type: array
+    description: >
+      5 HTML emails with inline CSS, mobile-responsive. Each includes
+      subject line (A/B variants), preheader, body HTML, and plain-text
+      fallback.
+
+  sms_sequence:
+    type: array
+    description: >
+      3 SMS messages with character counts and link placeholders.
+
+  landing_page:
+    type: string
+    description: >
+      Standalone HTML landing page. Self-contained with inline CSS/JS.
+      Mobile-responsive, conversion-optimized.
+
+  flow_diagrams:
+    type: object
+    description: >
+      Mermaid diagram source for: customer journey, email timeline,
+      ad variant matrix, and budget allocation.
+
+  review_site:
+    type: string
+    description: >
+      Campaign dashboard HTML that presents all deliverables for review.
+      Used at the generation_review approval gate.
+
+  verification_report:
+    type: object
+    description: >
+      Quality gate results: pass/fail per checklist item, with notes
+      on any issues found.
+
+# ---------------------------------------------------------------------------
+# Metadata
+# ---------------------------------------------------------------------------
+metadata:
+  author: Travis Hendrickson
+  created: "2026-04-01"
+  category: marketing
+  estimated_duration: "2-4 hours"
+  tags: [advertising, campaign, multi-channel, research, generation]
+  principles_ref: shared/principles/core.md

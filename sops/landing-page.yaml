@@ -1,0 +1,186 @@
+# =============================================================================
+# Landing Page SOP — BlackTie Digital Workforce
+# =============================================================================
+# Creates a standalone, conversion-optimized landing page from a product
+# brief. Research-backed structure with human approval before delivery.
+#
+# Runner: orchestrator/graphs/sop_runner.py
+# =============================================================================
+
+name: landing-page
+version: 1
+description: >
+  Create a standalone, mobile-responsive landing page optimized for
+  conversions. Researches the audience and competitors, wireframes the
+  page structure, builds complete HTML with inline CSS, and delivers
+  after human approval.
+
+# ---------------------------------------------------------------------------
+# Input Schema
+# ---------------------------------------------------------------------------
+input_schema:
+  product_name:
+    type: string
+    required: true
+    label: Product / Service Name
+    placeholder: "e.g. The Meridian at Downtown"
+
+  product_description:
+    type: text
+    required: true
+    label: Product Details
+    placeholder: "Features, benefits, pricing, differentiators..."
+    help: Everything the page needs to communicate about the product.
+
+  target_audience:
+    type: text
+    required: true
+    label: Target Audience
+    placeholder: "Who is this page for? Demographics, needs, motivations..."
+
+  tone:
+    type: select
+    required: false
+    label: Brand Tone
+    default: Professional
+    options:
+      - Professional
+      - Casual
+      - Bold
+      - Luxury
+      - Down-to-earth
+
+  cta_goal:
+    type: select
+    required: true
+    label: Primary CTA Goal
+    options:
+      - Schedule a Tour
+      - Request a Quote
+      - Sign Up
+      - Buy Now
+      - Learn More
+      - Contact Us
+      - Download
+    help: The single most important action you want visitors to take.
+
+  cta_url:
+    type: string
+    required: false
+    label: CTA Destination URL
+    placeholder: "https://..."
+    help: Where the CTA button should link. Leave blank for placeholder.
+
+  brand_assets:
+    type: file_upload
+    required: false
+    label: Brand Assets
+    accept: "image/*"
+    max_files: 10
+    help: Logo, hero images, product photos, brand guidelines.
+
+  brand_colors:
+    type: string
+    required: false
+    label: Brand Colors
+    placeholder: "Primary: #1A2B3C, Accent: #FF6B35"
+    help: Hex codes for primary and accent colors.
+
+  existing_copy:
+    type: text
+    required: false
+    label: Existing Copy / Messaging
+    help: Any existing headlines, taglines, or copy to incorporate.
+
+  special_instructions:
+    type: text
+    required: false
+    label: Special Instructions
+    placeholder: "Sections to include, compliance requirements, etc."
+
+# ---------------------------------------------------------------------------
+# Steps
+# ---------------------------------------------------------------------------
+steps:
+  - id: research
+    specialist: openclaw
+    description: >
+      Quick research pass: analyze the target audience's primary pain
+      points, review 2-3 competitor landing pages for structure and
+      messaging gaps, and identify the strongest angle for the hero
+      section. Output a one-page research brief.
+
+  - id: wireframe
+    specialist: openclaw
+    depends_on: [research]
+    description: >
+      Plan the page structure using the proven conversion flow:
+        1. Hero — headline + subhead + CTA + hero image
+        2. Problem — agitate the pain point
+        3. Solution — introduce the product as the answer
+        4. Features/Benefits — key selling points (3-5)
+        5. Social Proof — testimonials, stats, logos
+        6. Objection Handling — FAQ or trust signals
+        7. Final CTA — repeat the primary action
+      Define the headline, subhead, and key copy points for each section.
+      Output a structured wireframe document.
+
+  - id: build
+    specialist: claude_code
+    depends_on: [wireframe]
+    description: >
+      Build the complete landing page as standalone HTML. Requirements:
+        - Inline CSS (no external stylesheets)
+        - Mobile-first responsive design (breakpoints at 768px, 480px)
+        - Fast loading — no external JS dependencies
+        - Semantic HTML5 structure
+        - OG meta tags for social sharing
+        - Placeholder for tracking pixels (GA, Facebook Pixel)
+        - Smooth scroll for anchor links
+        - Accessible (alt text, contrast ratios, focus states)
+    rules:
+      - Self-contained single HTML file
+      - Mobile-first, responsive
+      - No external dependencies except images
+      - Include OG meta tags
+      - WCAG AA contrast compliance
+
+  - id: review
+    type: approval_gate
+    depends_on: [build]
+    description: >
+      Travis reviews the landing page. Check that the messaging is clear,
+      the CTA is prominent, the page is mobile-responsive, and the brand
+      tone is correct. Approve, request revisions, or reject.
+
+# ---------------------------------------------------------------------------
+# Output Schema
+# ---------------------------------------------------------------------------
+output_schema:
+  research_brief:
+    type: object
+    description: Audience research, competitor analysis, and recommended angle.
+
+  wireframe:
+    type: object
+    description: Page structure with section-by-section copy outlines.
+
+  landing_page_html:
+    type: string
+    description: >
+      Complete standalone HTML file. Mobile-responsive, self-contained,
+      ready to deploy.
+
+  preview_url:
+    type: string
+    description: URL to preview the page (if hosted for review).
+
+# ---------------------------------------------------------------------------
+# Metadata
+# ---------------------------------------------------------------------------
+metadata:
+  author: Travis Hendrickson
+  created: "2026-04-01"
+  category: marketing
+  estimated_duration: "1-2 hours"
+  tags: [landing-page, conversion, html, responsive]
