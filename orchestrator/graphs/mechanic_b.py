@@ -22,10 +22,9 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 from ..nodes.llm import call_claude, call_claude_structured
+from ..nodes.utils import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +78,7 @@ class MechanicBState(BaseModel):
 
 def _load_evaluation_criteria() -> dict[str, Any]:
     """Load Mechanic B evaluation criteria from the platform config."""
-    criteria_path = _PROJECT_ROOT / "platform" / "mechanics" / "evaluation-criteria.yaml"
+    criteria_path = PROJECT_ROOT / "mechanics" / "evaluation-criteria.yaml"
     try:
         raw = yaml.safe_load(criteria_path.read_text(encoding="utf-8"))
         return raw.get("mechanic_b", {})
@@ -90,7 +89,7 @@ def _load_evaluation_criteria() -> dict[str, Any]:
 
 def _load_mechanic_b_prompt() -> str:
     """Load the Mechanic B system prompt from platform config."""
-    prompt_path = _PROJECT_ROOT / "platform" / "mechanics" / "mechanic-b-prompt.md"
+    prompt_path = PROJECT_ROOT / "mechanics" / "mechanic-b-prompt.md"
     try:
         return prompt_path.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError) as exc:

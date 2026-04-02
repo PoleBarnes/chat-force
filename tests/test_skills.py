@@ -1,6 +1,6 @@
 """Validate OpenClaw skill files.
 
-Every skill in platform/skills/ is a Markdown file with YAML frontmatter
+Every skill in skills/ is a Markdown file with YAML frontmatter
 that defines the skill's metadata. This module validates that all skills
 are well-formed and consistent.
 """
@@ -11,7 +11,7 @@ import yaml
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = PROJECT_ROOT / "platform" / "skills"
+SKILLS_DIR = PROJECT_ROOT / "skills"
 
 REQUIRED_FRONTMATTER_FIELDS = {"name", "description", "triggers", "enabled_by_default", "category"}
 VALID_CATEGORIES = {"marketing", "engineering", "operations", "meta"}
@@ -48,7 +48,7 @@ class TestSkillFrontmatter:
     @pytest.fixture
     def skill_files(self):
         files = _get_skill_files()
-        assert len(files) > 0, "No skill files found in platform/skills/"
+        assert len(files) > 0, "No skill files found in skills/"
         return files
 
     @pytest.fixture
@@ -56,7 +56,7 @@ class TestSkillFrontmatter:
         return [(f, _parse_skill_frontmatter(f)) for f in skill_files]
 
     def test_skills_directory_exists(self):
-        assert SKILLS_DIR.is_dir(), "platform/skills/ directory does not exist"
+        assert SKILLS_DIR.is_dir(), "skills/ directory does not exist"
 
     def test_at_least_seven_skills_exist(self, skill_files):
         # README.md is excluded, so we expect 7 actual skill files

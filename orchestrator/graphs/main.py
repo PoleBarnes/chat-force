@@ -19,10 +19,12 @@ from typing import Any, Dict, List, Optional
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
+from ..nodes.agents import dispatch as agent_dispatch
 from ..nodes.context import assemble_context
-from ..nodes.llm import call_claude, call_claude_structured
+from ..nodes.llm import call_claude, call_claude_structured, get_temperature
 from ..nodes.routing import should_dispatch
 from ..nodes.sop_loader import load_sop, match_sop
+from ..nodes.specialists import get_specialist_prompt, SPECIALIST_PROMPTS
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +72,15 @@ class GraphState(BaseModel):
     # -- Execution --
     execution_results: dict[str, Any] = Field(default_factory=dict)
     deliverables: list[dict[str, Any]] = Field(default_factory=list)
+    current_step_index: int = 0  # Track position in plan for resume after approval gate
+    approval_gate_id: str = ""   # Which approval gate we're paused at (empty = none)
 
     # -- Review --
     deliverables_approved: bool = False
+
+    # -- Feedback (H11: carry human feedback on rejection loops) --
+    plan_feedback: str = ""           # Human's feedback when rejecting a plan
+    deliverable_feedback: str = ""    # Human's feedback when rejecting deliverables
 
     # -- Output --
     final_output: dict[str, Any] = Field(default_factory=dict)
@@ -86,54 +94,6 @@ class GraphState(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Specialist system prompts
-# ---------------------------------------------------------------------------
-
-_SPECIALIST_PROMPTS: dict[str, str] = {
-    "researcher": (
-        "You are a research specialist. Gather comprehensive, accurate information "
-        "on the given topic. Cite sources where possible. Focus on facts, data, and "
-        "actionable insights rather than opinions."
-    ),
-    "writer": (
-        "You are a professional writer. Produce clear, engaging, well-structured "
-        "content. Match the requested tone and audience. Ensure strong headlines, "
-        "logical flow, and a clear call to action where appropriate."
-    ),
-    "editor": (
-        "You are an editorial specialist. Polish the provided content for grammar, "
-        "clarity, consistency, and tone. Preserve the author's voice while improving "
-        "readability. Flag any factual claims that need verification."
-    ),
-    "analyst": (
-        "You are a data analyst. Examine the provided data or situation, identify "
-        "patterns and insights, and present findings in a clear, structured format "
-        "with supporting evidence."
-    ),
-    "strategist": (
-        "You are a marketing/business strategist. Develop actionable strategies "
-        "based on market analysis, competitive landscape, and business objectives. "
-        "Provide specific, measurable recommendations."
-    ),
-    "developer": (
-        "You are a software development specialist. Write clean, well-documented "
-        "code. Follow best practices for the relevant language/framework. Include "
-        "error handling and consider edge cases."
-    ),
-    "general": (
-        "You are a capable assistant. Complete the assigned task thoroughly and "
-        "accurately. If the task requires specialized knowledge, apply best practices "
-        "from the relevant domain."
-    ),
-}
-
-
-def _get_specialist_prompt(specialist: str) -> str:
-    """Return the system prompt for a specialist, falling back to 'general'."""
-    return _SPECIALIST_PROMPTS.get(specialist, _SPECIALIST_PROMPTS["general"])
-
-
-# ---------------------------------------------------------------------------
 # Node implementations
 # ---------------------------------------------------------------------------
 
@@ -142,26 +102,27 @@ def entry_node(state: GraphState) -> dict[str, Any]:
     workspace_id = state.workspace_id or "default"
     errors: list[str] = []
 
-    # Assemble context from all three tiers
-    try:
-        assembled = assemble_context(
-            workspace_id=workspace_id,
-            thread_messages=state.context.get("thread_messages", []),
-            current_input=state.raw_input,
-            token_budget=100_000,
-        )
-    except Exception as exc:
-        logger.error("Context assembly failed: %s", exc)
-        assembled = state.raw_input
-        errors.append(f"Context assembly error: {exc}")
-
-    # Match against registered SOPs
+    # Match against registered SOPs first (needed for skill selection in context)
     matched_sop: Optional[str] = None
     try:
         matched_sop = match_sop(state.raw_input, workspace_id)
     except Exception as exc:
         logger.error("SOP matching failed: %s", exc)
         errors.append(f"SOP matching error: {exc}")
+
+    # Assemble context from all tiers, including relevant skills (H7)
+    try:
+        assembled = assemble_context(
+            workspace_id=workspace_id,
+            thread_messages=state.context.get("thread_messages", []),
+            current_input=state.raw_input,
+            token_budget=100_000,
+            matched_sop=matched_sop,
+        )
+    except Exception as exc:
+        logger.error("Context assembly failed: %s", exc)
+        assembled = state.raw_input
+        errors.append(f"Context assembly error: {exc}")
 
     return {
         "status": TaskStatus.PLANNING,
@@ -187,28 +148,26 @@ def planner_node(state: GraphState) -> dict[str, Any]:
     if state.matched_sop:
         try:
             sop = load_sop(workspace_id, state.matched_sop)
-            steps = sop.get("steps", [])
             plan = []
-            for i, step_def in enumerate(steps):
-                step_type = step_def.get("type", "task")
-                if step_type == "human_approval":
+            for i, step_def in enumerate(sop.steps):
+                if step_def.type == "approval_gate":
                     # Approval gates become steps with a special specialist marker
                     plan.append(TaskStep(
-                        id=step_def.get("id", f"step-{i+1}"),
-                        description=step_def.get("description", ""),
+                        id=step_def.id or f"step-{i+1}",
+                        description=step_def.description,
                         specialist="human_approval",
-                        depends_on=step_def.get("depends_on", []),
+                        depends_on=step_def.depends_on,
                     ))
                 else:
-                    specialist = step_def.get("agent", step_def.get("specialist", "general"))
+                    specialist = step_def.specialist or "general"
                     # Normalize "openclaw" agent to "general" specialist
                     if specialist == "openclaw":
                         specialist = "general"
                     plan.append(TaskStep(
-                        id=step_def.get("id", f"step-{i+1}"),
-                        description=step_def.get("description", ""),
+                        id=step_def.id or f"step-{i+1}",
+                        description=step_def.description,
                         specialist=specialist,
-                        depends_on=step_def.get("depends_on", []),
+                        depends_on=step_def.depends_on,
                     ))
 
             return {
@@ -243,6 +202,13 @@ Order the steps logically. Identify which steps can run in parallel (no dependen
 Aim for 3-7 steps for most tasks. Be specific and actionable, not vague.
 
 Return your answer as a JSON object with a single key "steps" containing an array of step objects."""
+
+    # H11: Include revision feedback when re-planning after rejection
+    if state.plan_feedback:
+        planning_prompt += (
+            f"\n\n## Revision Request\n"
+            f"The previous plan was rejected. Feedback: {state.plan_feedback}"
+        )
 
     plan_schema = {
         "type": "object",
@@ -354,23 +320,55 @@ def preview_interrupt(state: GraphState) -> dict[str, Any]:
 def execution_node(state: GraphState) -> dict[str, Any]:
     """Execute the approved plan by dispatching each step to a specialist.
 
-    Steps are executed in dependency order. Steps with no unresolved
-    dependencies could be parallelised (future enhancement with LangGraph
-    Send API), but for now they run sequentially for reliability.
+    Steps are executed in dependency order starting from ``current_step_index``
+    (which is 0 on the first run and advanced past approval gates on resume).
+    When a ``human_approval`` step is encountered, execution pauses: partial
+    results are returned along with the ``approval_gate_id`` so the graph can
+    route to the deliverable interrupt for human review.
+
+    After the human approves, the graph re-enters this node with
+    ``current_step_index`` pointing past the gate so execution continues.
     """
-    results: dict[str, Any] = {}
-    deliverables: list[dict[str, Any]] = []
+    # Carry forward previously accumulated results when resuming after a gate
+    results: dict[str, Any] = dict(state.execution_results)
+    deliverables: list[dict[str, Any]] = list(state.deliverables)
     errors: list[str] = list(state.errors)
     context_text = state.context.get("assembled", state.raw_input)
 
-    # Build a lookup of completed step results for dependency injection
+    # Build lookup of completed step outputs for dependency injection.
+    # This includes results from prior runs (before an approval gate).
     completed: dict[str, str] = {}
+    for step_id, result in results.items():
+        if isinstance(result, dict) and result.get("status") == "completed":
+            completed[step_id] = result.get("output", "")
 
-    for step in state.plan:
-        # Skip human approval gates — they are handled by the interrupt system
+    # Resume from where we left off (0 on first run, past the gate on resume)
+    start_index = state.current_step_index
+
+    for idx in range(start_index, len(state.plan)):
+        step = state.plan[idx]
+
+        # ------------------------------------------------------------------
+        # Approval gate: pause execution and hand control to the interrupt
+        # ------------------------------------------------------------------
         if step.specialist == "human_approval":
-            results[step.id] = {"status": "skipped", "output": "Approval gate (handled by interrupt)"}
-            continue
+            results[step.id] = {
+                "status": "pending_approval",
+                "output": f"Approval gate '{step.id}' reached — awaiting human review.",
+            }
+            return {
+                "execution_results": results,
+                "deliverables": deliverables,
+                # Advance past the gate so the next run starts on the step after it
+                "current_step_index": idx + 1,
+                "approval_gate_id": step.id,
+                "status": TaskStatus.AWAITING_DELIVERABLE_REVIEW,
+                "errors": errors,
+            }
+
+        # ------------------------------------------------------------------
+        # Normal task step: dispatch to specialist
+        # ------------------------------------------------------------------
 
         # Gather results from dependencies
         dependency_context = ""
@@ -380,7 +378,7 @@ def execution_node(state: GraphState) -> dict[str, Any]:
                 dependency_context += f"\n\n### Results from '{dep_id}':\n{dep_output}"
 
         # Build the specialist prompt
-        specialist_system = _get_specialist_prompt(step.specialist)
+        specialist_system = get_specialist_prompt(step.specialist)
         step_prompt = f"""Execute the following task step:
 
 ## Step: {step.id}
@@ -395,17 +393,32 @@ def execution_node(state: GraphState) -> dict[str, Any]:
 
 Produce a thorough, complete deliverable for this step. Be specific and actionable."""
 
+        # H11: Include deliverable feedback when re-executing after rejection
+        if state.deliverable_feedback:
+            step_prompt += (
+                f"\n\n## Revision Request\n"
+                f"The previous deliverables were rejected. Feedback: {state.deliverable_feedback}"
+            )
+
         try:
             # Use Sonnet for routine steps, Opus for complex specialist work
             model = "claude-sonnet-4-6"
             if step.specialist in ("strategist", "analyst", "developer"):
                 model = "claude-opus-4-6"
 
+            # H8: Use creative temperature for creative specialists
+            creative_specialists = {"writer", "general"}
+            temperature = (
+                get_temperature("creative")
+                if step.specialist in creative_specialists
+                else 0.0
+            )
+
             output = call_claude(
                 prompt=step_prompt,
                 system=specialist_system,
                 model=model,
-                temperature=0.0,
+                temperature=temperature,
                 max_tokens=4096,
             )
             results[step.id] = {"status": "completed", "output": output}
@@ -422,9 +435,12 @@ Produce a thorough, complete deliverable for this step. Be specific and actionab
             results[step.id] = {"status": "error", "error": str(exc)}
             completed[step.id] = f"[ERROR: {exc}]"
 
+    # All steps complete (no more approval gates) — proceed to final review
     return {
         "execution_results": results,
         "deliverables": deliverables,
+        "current_step_index": len(state.plan),
+        "approval_gate_id": "",  # Clear — no gate active
         "status": TaskStatus.AWAITING_DELIVERABLE_REVIEW,
         "errors": errors,
     }
@@ -436,10 +452,25 @@ def deliverable_interrupt(state: GraphState) -> dict[str, Any]:
     Like ``preview_interrupt``, this node is configured with
     ``interrupt_before``. The interface layer renders the deliverables and
     collects feedback, then resumes the graph with ``deliverables_approved``.
+
+    This node serves double duty:
+    - **Approval gates:** When ``approval_gate_id`` is set, this is a
+      mid-execution gate (e.g. research_review). After approval the graph
+      routes back to ``execution_node`` to continue from the next step.
+    - **Final review:** When ``approval_gate_id`` is empty, all steps are
+      done and this is the final deliverable review before finalization.
     """
+    at_gate = bool(state.approval_gate_id)
+
     # Build a review-friendly summary
     deliverable_summary = {
-        "title": "Deliverables for Review",
+        "title": (
+            f"Approval Gate: {state.approval_gate_id}"
+            if at_gate
+            else "Deliverables for Review"
+        ),
+        "approval_gate_id": state.approval_gate_id,
+        "is_approval_gate": at_gate,
         "items": [
             {
                 "step_id": d["step_id"],
@@ -465,7 +496,7 @@ def deliverable_interrupt(state: GraphState) -> dict[str, Any]:
         "deliverables_approved": state.deliverables_approved,
         "status": (
             TaskStatus.FINALIZING
-            if state.deliverables_approved
+            if state.deliverables_approved and not at_gate
             else TaskStatus.EXECUTING
         ),
     }
@@ -567,6 +598,28 @@ def mechanic_b_node(state: GraphState) -> dict[str, Any]:
     }
 
 
+def mechanic_approval_interrupt(state: GraphState) -> dict[str, Any]:
+    """Present Mechanic B proposals for human approval.
+
+    This node is configured with ``interrupt_before`` so the graph pauses
+    before entering it. The interface layer renders the proposals and
+    collects Travis's decision (approve, reject, or defer each proposal).
+
+    Proposals may include SOP improvements, new skill suggestions, or
+    configuration changes that require human sign-off before applying.
+    """
+    report = state.mechanic_b_report
+    proposals = report.get("proposals", [])
+
+    return {
+        "context": {
+            **state.context,
+            "mechanic_proposals": proposals,
+            "mechanic_summary": report.get("summary", ""),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Routing helpers
 # ---------------------------------------------------------------------------
@@ -585,9 +638,26 @@ def after_preview(state: GraphState) -> str:
 def after_deliverable_review(state: GraphState) -> str:
     """Route after the deliverable review interrupt.
 
-    If the human rejected deliverables, route back to execution_node
-    for selective re-execution.
+    Three cases:
+    1. **At an approval gate, approved:** Route back to ``execution_node``
+       to continue executing the remaining steps after the gate.
+    2. **At an approval gate, rejected:** Route to END — the workflow is
+       cancelled at this gate.
+    3. **Final review (no gate), approved:** Route to ``finalization_node``.
+    4. **Final review, rejected:** Route back to ``execution_node`` for
+       selective re-execution.
     """
+    at_gate = bool(state.approval_gate_id)
+
+    if at_gate:
+        if state.deliverables_approved:
+            # Approved at gate — continue execution from where we left off
+            return "execution_node"
+        else:
+            # Rejected at gate — abort the workflow
+            return END
+
+    # Final deliverable review (not at a gate)
     if state.deliverables_approved:
         return "finalization_node"
     return "execution_node"
@@ -610,6 +680,7 @@ def build_graph() -> StateGraph:
     builder.add_node("deliverable_interrupt", deliverable_interrupt)
     builder.add_node("finalization_node", finalization_node)
     builder.add_node("mechanic_b_node", mechanic_b_node)
+    builder.add_node("mechanic_approval_interrupt", mechanic_approval_interrupt)
 
     # -- Set entry point --
     builder.set_entry_point("entry_node")
@@ -621,14 +692,20 @@ def build_graph() -> StateGraph:
     builder.add_edge("execution_node", "deliverable_interrupt")
     builder.add_conditional_edges("deliverable_interrupt", after_deliverable_review)
     builder.add_edge("finalization_node", "mechanic_b_node")
-    builder.add_edge("mechanic_b_node", END)
+    # H10: Route Mechanic B proposals through approval interrupt before ending
+    builder.add_edge("mechanic_b_node", "mechanic_approval_interrupt")
+    builder.add_edge("mechanic_approval_interrupt", END)
 
     return builder
 
 
-# Compile with interrupt_before on the two approval-gate nodes.
+# Compile with interrupt_before on approval-gate nodes.
 # LangGraph Cloud will pause execution before these nodes, enabling the
 # interface layer to collect human input and resume the graph.
 graph = build_graph().compile(
-    interrupt_before=["preview_interrupt", "deliverable_interrupt"],
+    interrupt_before=[
+        "preview_interrupt",
+        "deliverable_interrupt",
+        "mechanic_approval_interrupt",
+    ],
 )

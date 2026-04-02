@@ -9,9 +9,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import anthropic
+import yaml
+
+try:
+    from audit.audit_logger import AuditLogger, AuditEventType
+    _audit = AuditLogger(workspace_id="platform")
+except Exception:
+    _audit = None
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +45,26 @@ def get_client() -> anthropic.Anthropic:
             )
         _client = anthropic.Anthropic(api_key=api_key)
     return _client
+
+
+# ---------------------------------------------------------------------------
+# Temperature config
+# ---------------------------------------------------------------------------
+
+def get_temperature(task_type: str = "planning") -> float:
+    """Get the configured temperature for a task type.
+
+    Reads from ``base-config.yaml`` under ``models.temperature``.
+
+    Types: creative (0.7), planning (0.0), mechanic (0.0), routine (0.0)
+    """
+    config_path = Path(__file__).resolve().parent.parent.parent / "base-config.yaml"
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        temps = config.get("models", {}).get("temperature", {})
+        return float(temps.get(task_type, 0.0))
+    except (FileNotFoundError, yaml.YAMLError, KeyError, TypeError):
+        return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +113,19 @@ def call_claude(
 
     try:
         response = client.messages.create(**kwargs)
+
+        # Log the LLM call for audit trail and cost tracking
+        if _audit is not None:
+            try:
+                _audit.log(AuditEventType.LLM_CALL, {
+                    "model": model,
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                    "purpose": system[:100] if system else prompt[:100],
+                })
+            except Exception:
+                logger.debug("Audit logging failed for LLM call", exc_info=True)
+
         # Extract text from the first content block
         for block in response.content:
             if block.type == "text":
@@ -99,29 +140,40 @@ def call_claude(
 # Structured (JSON) completion
 # ---------------------------------------------------------------------------
 
+def _parse_json_response(text: str) -> dict[str, Any]:
+    """Parse a JSON response, handling markdown fences gracefully."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        newline_idx = cleaned.find("\n")
+        if newline_idx >= 0:
+            cleaned = cleaned[newline_idx + 1:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    return json.loads(cleaned.strip())
+
+
 def call_claude_structured(
     prompt: str,
     system: str = "",
-    response_schema: Optional[Dict[str, Any]] = None,
+    response_schema: dict[str, Any] | None = None,
     model: str = "claude-opus-4-6",
     temperature: float = 0.0,
     max_tokens: int = 4096,
 ) -> dict[str, Any]:
-    """Call Claude expecting a structured JSON response.
+    """Call Claude expecting a structured JSON response via tool_use.
 
-    The function instructs Claude to return valid JSON matching the optional
-    *response_schema*.  The raw text is parsed with ``json.loads``; if parsing
-    fails after a retry the error is raised.
+    Uses the Anthropic SDK's tool_use feature for reliable structured output.
+    Defines a tool with the response schema, forces Claude to use it, and
+    extracts the structured result from the tool_use response block.
 
     Parameters
     ----------
     prompt:
         The user-turn message content.
     system:
-        Optional system prompt (schema instructions are appended automatically).
+        Optional system prompt.
     response_schema:
-        A JSON Schema dict describing the expected output shape.  Included in
-        the system prompt so Claude knows what to produce.
+        A JSON Schema dict describing the expected output shape.
     model:
         Anthropic model identifier.
     temperature:
@@ -132,58 +184,54 @@ def call_claude_structured(
     Returns
     -------
     dict
-        Parsed JSON response.
+        Parsed structured response.
     """
-    schema_instruction = (
-        "You MUST respond with valid JSON only. No markdown, no explanation, "
-        "no code fences. Just the raw JSON object."
-    )
-    if response_schema:
-        schema_instruction += (
-            f"\n\nYour response must conform to this JSON Schema:\n"
-            f"{json.dumps(response_schema, indent=2)}"
-        )
+    client = get_client()
 
-    full_system = f"{system}\n\n{schema_instruction}" if system else schema_instruction
+    # Define a tool that accepts the response schema
+    tool_name = "structured_response"
+    tools = [{
+        "name": tool_name,
+        "description": "Return the structured response",
+        "input_schema": response_schema or {"type": "object"},
+    }]
 
-    raw = call_claude(
-        prompt=prompt,
-        system=full_system,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-
-    # Strip markdown fences if Claude included them despite instructions
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        # Remove opening fence (possibly ```json)
-        first_newline = cleaned.index("\n")
-        cleaned = cleaned[first_newline + 1 :]
-    if cleaned.endswith("```"):
-        cleaned = cleaned[: -3]
-    cleaned = cleaned.strip()
+    messages = [{"role": "user", "content": prompt}]
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": {"type": "tool", "name": tool_name},
+    }
+    if system:
+        kwargs["system"] = system
 
     try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        logger.warning("First JSON parse failed, retrying with explicit correction...")
-        retry_prompt = (
-            f"The following text was supposed to be valid JSON but failed to parse:\n\n"
-            f"{raw}\n\n"
-            f"Please return ONLY the corrected, valid JSON."
-        )
-        retry_raw = call_claude(
-            prompt=retry_prompt,
-            system=schema_instruction,
-            model=model,
-            temperature=0.0,
-            max_tokens=max_tokens,
-        )
-        retry_cleaned = retry_raw.strip()
-        if retry_cleaned.startswith("```"):
-            first_newline = retry_cleaned.index("\n")
-            retry_cleaned = retry_cleaned[first_newline + 1 :]
-        if retry_cleaned.endswith("```"):
-            retry_cleaned = retry_cleaned[: -3]
-        return json.loads(retry_cleaned.strip())
+        response = client.messages.create(**kwargs)
+
+        # Log the LLM call for audit trail and cost tracking
+        if _audit is not None:
+            try:
+                _audit.log(AuditEventType.LLM_CALL, {
+                    "model": model,
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                    "purpose": f"structured: {system[:80]}" if system else f"structured: {prompt[:80]}",
+                })
+            except Exception:
+                logger.debug("Audit logging failed for structured LLM call", exc_info=True)
+
+        # Extract the tool_use result
+        for block in response.content:
+            if block.type == "tool_use" and block.name == tool_name:
+                return block.input
+        # Fallback: try to parse text response
+        for block in response.content:
+            if block.type == "text":
+                return _parse_json_response(block.text)
+        return {}
+    except anthropic.APIError as exc:
+        logger.error("Anthropic API error in structured call: %s", exc)
+        raise

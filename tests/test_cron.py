@@ -13,13 +13,13 @@ import yaml
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CRON_DIR = PROJECT_ROOT / "platform" / "cron"
+CRON_DIR = PROJECT_ROOT / "cron"
 
 
 def _load_cron_yaml(filename: str) -> dict:
     """Load a YAML file from the cron directory."""
     path = CRON_DIR / filename
-    assert path.exists(), f"platform/cron/{filename} not found"
+    assert path.exists(), f"cron/{filename} not found"
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert isinstance(data, dict), f"{filename} did not parse to a dict"
     return data
@@ -186,8 +186,8 @@ class TestCronDirectory:
     """Test the cron directory structure."""
 
     def test_cron_directory_exists(self):
-        """platform/cron/ must exist."""
-        assert CRON_DIR.is_dir(), "platform/cron/ directory not found"
+        """cron/ must exist."""
+        assert CRON_DIR.is_dir(), "cron/ directory not found"
 
     def test_all_cron_files_are_valid_yaml(self):
         """Every .yaml file in cron/ must parse."""

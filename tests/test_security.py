@@ -5,14 +5,8 @@ Tests cover:
   - Audit logger write/read/scrub functionality
   - Secret pattern detection
   - Git pre-push hook existence
-
-Note: The project's ``platform/`` directory name collides with Python's
-stdlib ``platform`` module. We use importlib to load the audit sub-package
-by absolute file path.
 """
 
-import importlib
-import importlib.util
 import json
 import re
 import sys
@@ -22,57 +16,11 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# =========================================================================
-# Import helpers — load platform.audit modules by file path to avoid
-# collision with Python's stdlib "platform" module.
-# =========================================================================
+# Add project root to sys.path so audit/ is importable as a top-level package
+sys.path.insert(0, str(PROJECT_ROOT))
 
-_AUDIT_DIR = PROJECT_ROOT / "platform" / "audit"
-
-
-def _load_module(name, path):
-    """Import a single .py file as a module with the given dotted name."""
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-# Load secret_patterns first (audit_logger depends on it via relative import)
-_sp_mod = _load_module(
-    "_plat_audit.secret_patterns", _AUDIT_DIR / "secret_patterns.py"
-)
-
-# Create a minimal synthetic package so the relative import in audit_logger
-# (``from .secret_patterns import COMPILED_PATTERNS``) resolves correctly.
-_pkg_spec = importlib.util.spec_from_file_location(
-    "_plat_audit",
-    _AUDIT_DIR / "__init__.py",
-    submodule_search_locations=[str(_AUDIT_DIR)],
-)
-_pkg_mod = importlib.util.module_from_spec(_pkg_spec)
-_pkg_mod.secret_patterns = _sp_mod
-sys.modules["_plat_audit"] = _pkg_mod
-_sp_mod.__package__ = "_plat_audit"
-
-# Now load audit_logger within the synthetic package
-_al_spec = importlib.util.spec_from_file_location(
-    "_plat_audit.audit_logger",
-    _AUDIT_DIR / "audit_logger.py",
-)
-_al_mod = importlib.util.module_from_spec(_al_spec)
-_al_mod.__package__ = "_plat_audit"
-sys.modules["_plat_audit.audit_logger"] = _al_mod
-_al_spec.loader.exec_module(_al_mod)
-
-# Convenience aliases used throughout this test file
-AuditLogger = _al_mod.AuditLogger
-AuditEventType = _al_mod.AuditEventType
-scan_text = _sp_mod.scan_text
-has_secrets = _sp_mod.has_secrets
-scrub_text = _sp_mod.scrub_text
-COMPILED_PATTERNS = _sp_mod.COMPILED_PATTERNS
+from audit.audit_logger import AuditLogger, AuditEventType
+from audit.secret_patterns import scan_text, has_secrets, scrub_text, COMPILED_PATTERNS
 
 
 # =========================================================================
@@ -85,7 +33,7 @@ class TestExecApprovals:
 
     @pytest.fixture
     def exec_approvals(self):
-        path = PROJECT_ROOT / "platform" / "exec-approvals.json"
+        path = PROJECT_ROOT / "security" / "exec-approvals.json"
         assert path.exists(), "exec-approvals.json not found"
         return json.loads(path.read_text(encoding="utf-8"))
 

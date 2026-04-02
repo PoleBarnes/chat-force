@@ -14,7 +14,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-PATTERNS_PY="$REPO_ROOT/platform/audit/secret_patterns.py"
+PATTERNS_PY="$REPO_ROOT/audit/secret_patterns.py"
 
 # ANSI colors
 RED='\033[0;31m'
@@ -23,7 +23,7 @@ NC='\033[0m' # No Color
 
 # ---------------------------------------------------------------------------
 # Secret patterns (fallback if Python is unavailable)
-# Keep in sync with platform/audit/secret_patterns.py
+# Keep in sync with audit/secret_patterns.py
 # ---------------------------------------------------------------------------
 FALLBACK_PATTERNS=(
     'sk-ant-[a-zA-Z0-9_-]{20,}'
@@ -51,9 +51,9 @@ FALLBACK_PATTERNS=(
 scan_with_python() {
     local diff_content="$1"
     python3 -c "
-import sys
+import sys, os
 sys.path.insert(0, '$REPO_ROOT')
-from platform.audit.secret_patterns import scan_text
+from audit.secret_patterns import scan_text
 
 text = sys.stdin.read()
 findings = scan_text(text)

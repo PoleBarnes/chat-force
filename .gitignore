@@ -8,7 +8,7 @@ credentials*.json
 secrets/
 
 # Audit logs (generated at runtime, not committed)
-platform/audit/logs/
+audit/logs/
 
 # Python
 __pycache__/

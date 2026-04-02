@@ -1,8 +1,7 @@
 """SOP discovery, loading, and matching.
 
-SOPs (Standard Operating Procedures) live as YAML files in two locations:
-  - Platform-wide:  ``platform/sops/`` (available to all workspaces)
-  - Workspace-specific:  ``workspaces/{id}/sops/`` (scoped to one client)
+SOPs (Standard Operating Procedures) live as YAML files in:
+  - ``sops/`` (platform-level SOP templates, available to all workspaces)
 
 This module provides helpers to list available SOPs, load a specific one,
 and match a user's input to the most relevant SOP.
@@ -11,50 +10,72 @@ and match a user's input to the most relevant SOP.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+from pydantic import BaseModel, Field
+
+from .utils import PROJECT_ROOT, load_yaml_safe
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+def _validate_workspace_id(workspace_id: str) -> str:
+    """Validate workspace_id to prevent path traversal."""
+    if not re.match(r'^[a-zA-Z0-9_-]+$', workspace_id):
+        raise ValueError(
+            f"Invalid workspace_id: {workspace_id!r} "
+            "— must be alphanumeric with hyphens/underscores only"
+        )
+    return workspace_id
 
 
-def _load_yaml_safe(path: Path) -> dict[str, Any]:
-    """Load a YAML file, returning empty dict on any error."""
-    try:
-        text = path.read_text(encoding="utf-8")
-        return yaml.safe_load(text) or {}
-    except FileNotFoundError:
-        return {}
-    except (yaml.YAMLError, OSError) as exc:
-        logger.warning("Failed to load SOP at %s: %s", path, exc)
-        return {}
+# ---------------------------------------------------------------------------
+# SOP data model (canonical location -- imported by sop_runner and main graph)
+# ---------------------------------------------------------------------------
+
+class SOPStep(BaseModel):
+    """A single step inside an SOP definition."""
+    id: str
+    description: str = ""
+    specialist: str = ""
+    agent: str = ""  # Agent dispatcher (e.g. "openclaw", "perplexity", "api:gemini")
+    type: str = "task"  # "task" or "approval_gate"
+    depends_on: list[str] = Field(default_factory=list)
+
+
+class SOPDefinition(BaseModel):
+    """Parsed representation of an SOP YAML file."""
+    name: str
+    version: int = 1
+    description: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    steps: list[SOPStep] = Field(default_factory=list)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 def _sop_dirs(workspace_id: str) -> list[Path]:
-    """Return the list of directories to search for SOPs, in priority order.
+    """Return the list of directories to search for SOPs.
 
-    Workspace-specific SOPs take precedence over platform-wide ones.
+    All SOPs live at the platform level in ``sops/``.
     """
+    _validate_workspace_id(workspace_id)
     dirs: list[Path] = []
-    ws_sops = _PROJECT_ROOT / "workspaces" / workspace_id / "sops"
-    if ws_sops.is_dir():
-        dirs.append(ws_sops)
-    platform_sops = _PROJECT_ROOT / "platform" / "sops"
-    if platform_sops.is_dir():
-        dirs.append(platform_sops)
+    sops_dir = PROJECT_ROOT / "sops"
+    if sops_dir.is_dir():
+        dirs.append(sops_dir)
     return dirs
 
 
 def list_sops(workspace_id: str) -> list[dict[str, Any]]:
-    """List all SOPs available for a workspace (platform + workspace-specific).
+    """List all SOPs available for a workspace.
 
     Parameters
     ----------
     workspace_id:
-        Directory name under ``workspaces/``.
+        Workspace identifier (currently unused; all SOPs are platform-level).
 
     Returns
     -------
@@ -66,9 +87,9 @@ def list_sops(workspace_id: str) -> list[dict[str, Any]]:
     seen_names: set[str] = set()
 
     for sop_dir in _sop_dirs(workspace_id):
-        source = "workspace" if "workspaces" in str(sop_dir) else "platform"
+        source = "platform"
         for yaml_file in sorted(sop_dir.glob("*.yaml")):
-            data = _load_yaml_safe(yaml_file)
+            data = load_yaml_safe(yaml_file)
             name = data.get("name", yaml_file.stem)
             if name in seen_names:
                 continue  # Workspace-level SOP already found with this name
@@ -83,23 +104,24 @@ def list_sops(workspace_id: str) -> list[dict[str, Any]]:
     return results
 
 
-def load_sop(workspace_id: str, sop_name: str) -> dict[str, Any]:
+def load_sop(workspace_id: str, sop_name: str) -> SOPDefinition:
     """Load a specific SOP definition from YAML.
 
-    Searches workspace SOPs first, then platform SOPs.
+    Searches the platform-level ``sops/`` directory and returns a validated
+    ``SOPDefinition`` Pydantic model.
 
     Parameters
     ----------
     workspace_id:
-        Directory name under ``workspaces/``.
+        Workspace identifier (currently unused; all SOPs are platform-level).
     sop_name:
         The SOP name to look for (matched against the ``name`` field in YAML,
         or the filename stem as a fallback).
 
     Returns
     -------
-    dict
-        The full parsed SOP definition.
+    SOPDefinition
+        Parsed and validated SOP definition.
 
     Raises
     ------
@@ -108,16 +130,82 @@ def load_sop(workspace_id: str, sop_name: str) -> dict[str, Any]:
     """
     for sop_dir in _sop_dirs(workspace_id):
         for yaml_file in sop_dir.glob("*.yaml"):
-            data = _load_yaml_safe(yaml_file)
+            data = load_yaml_safe(yaml_file)
             file_name = data.get("name", yaml_file.stem)
             # Match by name field or filename stem (case-insensitive)
             if (
                 file_name.lower() == sop_name.lower()
                 or yaml_file.stem.lower() == sop_name.lower()
             ):
-                return data
+                return _parse_sop_definition(data)
 
     raise FileNotFoundError(f"SOP '{sop_name}' not found for workspace '{workspace_id}'")
+
+
+def _parse_sop_definition(raw: dict[str, Any]) -> SOPDefinition:
+    """Parse a raw YAML dict into a validated SOPDefinition model."""
+    steps = raw.get("steps", [])
+    normalized_steps = []
+    for step_raw in steps:
+        step_type = step_raw.get("type", "task")
+        # Normalize "human_approval" to "approval_gate" for consistency
+        if step_type == "human_approval":
+            step_type = "approval_gate"
+        normalized_steps.append(SOPStep(
+            id=step_raw.get("id", ""),
+            description=step_raw.get("description", ""),
+            specialist=step_raw.get("specialist", step_raw.get("agent", "general")),
+            agent=step_raw.get("agent", step_raw.get("specialist", "openclaw")),
+            type=step_type,
+            depends_on=step_raw.get("depends_on", []),
+        ))
+
+    return SOPDefinition(
+        name=raw.get("name", "unknown"),
+        version=raw.get("version", 1),
+        description=raw.get("description", ""),
+        input_schema=raw.get("input_schema", raw.get("inputs", {})),
+        steps=normalized_steps,
+        output_schema=raw.get("output_schema", {}),
+    )
+
+
+def load_sop_from_path(path: Path | str) -> SOPDefinition:
+    """Load and validate an SOP from a YAML file path.
+
+    Parameters
+    ----------
+    path:
+        Path to the SOP YAML file.
+
+    Returns
+    -------
+    SOPDefinition
+        Parsed and validated SOP definition.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the YAML file does not exist.
+    ValueError
+        If the YAML is malformed or missing required fields.
+    """
+    sop_path = Path(path)
+    if not sop_path.exists():
+        raise FileNotFoundError(f"SOP file not found: {sop_path}")
+
+    try:
+        raw = yaml.safe_load(sop_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Invalid YAML in {sop_path}: {exc}") from exc
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"SOP file must contain a YAML mapping, got {type(raw).__name__}")
+
+    if "name" not in raw:
+        raise ValueError(f"SOP file {sop_path} is missing required field 'name'")
+
+    return _parse_sop_definition(raw)
 
 
 def match_sop(user_input: str, workspace_id: str) -> Optional[str]:
@@ -133,7 +221,7 @@ def match_sop(user_input: str, workspace_id: str) -> Optional[str]:
     user_input:
         The raw text from the user.
     workspace_id:
-        Directory name under ``workspaces/``.
+        Workspace identifier (currently unused; all SOPs are platform-level).
 
     Returns
     -------

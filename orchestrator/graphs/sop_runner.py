@@ -41,69 +41,13 @@ import yaml
 from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
-from ..nodes.llm import call_claude
+from ..nodes.agents import dispatch as agent_dispatch
+from ..nodes.llm import call_claude, get_temperature
+from ..nodes.sop_loader import SOPDefinition, SOPStep, load_sop_from_path
+from ..nodes.specialists import get_specialist_prompt, SPECIALIST_PROMPTS
+from ..nodes.utils import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
-
-# Specialist system prompts (same as main graph for consistency)
-_SPECIALIST_PROMPTS: dict[str, str] = {
-    "researcher": (
-        "You are a research specialist. Gather comprehensive, accurate information "
-        "on the given topic. Cite sources where possible. Focus on facts, data, and "
-        "actionable insights."
-    ),
-    "writer": (
-        "You are a professional writer. Produce clear, engaging, well-structured "
-        "content. Match the requested tone and audience."
-    ),
-    "editor": (
-        "You are an editorial specialist. Polish content for grammar, clarity, "
-        "consistency, and tone. Preserve the author's voice while improving readability."
-    ),
-    "analyst": (
-        "You are a data analyst. Examine data or situations, identify patterns, "
-        "and present findings in a clear, structured format."
-    ),
-    "strategist": (
-        "You are a marketing/business strategist. Develop actionable strategies "
-        "with specific, measurable recommendations."
-    ),
-    "developer": (
-        "You are a software developer. Write clean, well-documented code following "
-        "best practices. Include error handling."
-    ),
-    "openclaw": (
-        "You are a capable AI assistant. Complete the assigned task thoroughly "
-        "and accurately, applying best practices from the relevant domain."
-    ),
-    "general": (
-        "You are a capable AI assistant. Complete the assigned task thoroughly "
-        "and accurately, applying best practices from the relevant domain."
-    ),
-}
-
-
-# ---------------------------------------------------------------------------
-# SOP data model
-# ---------------------------------------------------------------------------
-
-class SOPStep(BaseModel):
-    """A single step inside an SOP definition."""
-    id: str
-    description: str = ""
-    specialist: str = ""
-    type: str = "task"  # "task" or "approval_gate"
-    depends_on: list[str] = Field(default_factory=list)
-
-
-class SOPDefinition(BaseModel):
-    """Parsed representation of an SOP YAML file."""
-    name: str
-    version: int = 1
-    description: str = ""
-    input_schema: dict[str, Any] = Field(default_factory=dict)
-    steps: list[SOPStep] = Field(default_factory=list)
-    output_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -119,71 +63,6 @@ class SOPGraphState(BaseModel):
     approved: bool = False
     outputs: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# SOP loading
-# ---------------------------------------------------------------------------
-
-def load_sop(path: Union[str, Path]) -> SOPDefinition:
-    """Load and validate an SOP from a YAML file.
-
-    Parameters
-    ----------
-    path:
-        Path to the SOP YAML file.
-
-    Returns
-    -------
-    SOPDefinition
-        Parsed and validated SOP definition.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the YAML file does not exist.
-    ValueError
-        If the YAML is malformed or missing required fields.
-    """
-    sop_path = Path(path)
-    if not sop_path.exists():
-        raise FileNotFoundError(f"SOP file not found: {sop_path}")
-
-    try:
-        raw = yaml.safe_load(sop_path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Invalid YAML in {sop_path}: {exc}") from exc
-
-    if not isinstance(raw, dict):
-        raise ValueError(f"SOP file must contain a YAML mapping, got {type(raw).__name__}")
-
-    if "name" not in raw:
-        raise ValueError(f"SOP file {sop_path} is missing required field 'name'")
-
-    # Normalize step definitions
-    steps = raw.get("steps", [])
-    normalized_steps = []
-    for step_raw in steps:
-        step_type = step_raw.get("type", "task")
-        # Normalize "human_approval" to "approval_gate" for consistency
-        if step_type == "human_approval":
-            step_type = "approval_gate"
-        normalized_steps.append(SOPStep(
-            id=step_raw.get("id", ""),
-            description=step_raw.get("description", ""),
-            specialist=step_raw.get("specialist", step_raw.get("agent", "general")),
-            type=step_type,
-            depends_on=step_raw.get("depends_on", []),
-        ))
-
-    return SOPDefinition(
-        name=raw["name"],
-        version=raw.get("version", 1),
-        description=raw.get("description", ""),
-        input_schema=raw.get("input_schema", raw.get("inputs", {})),
-        steps=normalized_steps,
-        output_schema=raw.get("output_schema", {}),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +89,7 @@ def _make_task_node(step: SOPStep, sop: SOPDefinition):
 
         # Build the specialist prompt
         specialist = step.specialist or "general"
-        system_prompt = _SPECIALIST_PROMPTS.get(
-            specialist, _SPECIALIST_PROMPTS["general"]
-        )
+        system_prompt = get_specialist_prompt(specialist)
 
         # Build the task prompt with SOP context
         inputs_text = ""
@@ -235,17 +112,14 @@ def _make_task_node(step: SOPStep, sop: SOPDefinition):
 Produce a thorough, complete deliverable for this step. Be specific and actionable."""
 
         try:
-            # Use Sonnet for routine steps, Opus for complex specialist work
-            model = "claude-sonnet-4-6"
-            if specialist in ("strategist", "analyst", "developer"):
-                model = "claude-opus-4-6"
-
-            output = call_claude(
+            # H9: Use agent dispatch interface to route to the appropriate agent
+            # H8: Temperature is handled inside the agent dispatcher
+            agent_name = step.agent or "openclaw"
+            output = agent_dispatch(
+                agent=agent_name,
                 prompt=task_prompt,
                 system=system_prompt,
-                model=model,
-                temperature=0.0,
-                max_tokens=4096,
+                specialist=specialist,
             )
 
             new_results = {
@@ -312,8 +186,29 @@ def _make_approval_node(step: SOPStep):
 # Graph generator
 # ---------------------------------------------------------------------------
 
+def _approval_gate_router(state: SOPGraphState) -> str:
+    """Route after an approval gate: continue if approved, END if rejected."""
+    if state.approved:
+        return "continue"
+    return "end"
+
+
 def generate_graph_from_sop(sop: SOPDefinition) -> tuple[StateGraph, list[str]]:
     """Dynamically build a LangGraph StateGraph from an SOP definition.
+
+    Builds a proper DAG from the ``depends_on`` declarations on each step,
+    enabling parallel execution of independent steps (e.g. the three research
+    streams in the ad-campaign SOP all depend on ``parse_brief`` and can run
+    concurrently).
+
+    Wiring rules:
+    1. Steps with explicit ``depends_on`` get edges FROM each dependency.
+    2. Steps with no ``depends_on`` (except the very first step) implicitly
+       depend on the previous step in declaration order — this preserves
+       backward compatibility for SOPs that don't use depends_on at all.
+    3. Steps with no downstream dependents (terminal nodes) edge to END.
+    4. Approval gates get conditional edges: approved -> first downstream
+       dependent (or END), rejected -> END.
 
     Parameters
     ----------
@@ -329,7 +224,15 @@ def generate_graph_from_sop(sop: SOPDefinition) -> tuple[StateGraph, list[str]]:
     builder = StateGraph(SOPGraphState)
     approval_gate_ids: list[str] = []
 
-    # Create nodes for every step
+    if not sop.steps:
+        return builder, approval_gate_ids
+
+    # Index steps by ID for quick lookup
+    step_by_id: dict[str, SOPStep] = {step.id: step for step in sop.steps}
+
+    # ------------------------------------------------------------------
+    # 1. Add all nodes
+    # ------------------------------------------------------------------
     for step in sop.steps:
         if step.type == "approval_gate":
             builder.add_node(step.id, _make_approval_node(step))
@@ -337,15 +240,97 @@ def generate_graph_from_sop(sop: SOPDefinition) -> tuple[StateGraph, list[str]]:
         else:
             builder.add_node(step.id, _make_task_node(step, sop))
 
-    # Wire edges based on dependency order
-    if sop.steps:
-        builder.set_entry_point(sop.steps[0].id)
+    # ------------------------------------------------------------------
+    # 2. Set entry point
+    # ------------------------------------------------------------------
+    builder.set_entry_point(sop.steps[0].id)
 
-        for i, step in enumerate(sop.steps):
-            if i < len(sop.steps) - 1:
-                next_step = sop.steps[i + 1]
-                builder.add_edge(step.id, next_step.id)
+    # ------------------------------------------------------------------
+    # 3. Resolve effective dependencies for every step
+    # ------------------------------------------------------------------
+    # effective_deps[step_id] = set of step IDs this step depends on
+    effective_deps: dict[str, set[str]] = {}
+    has_explicit_deps: set[str] = set()
+
+    for step in sop.steps:
+        if step.depends_on:
+            effective_deps[step.id] = set(step.depends_on)
+            has_explicit_deps.add(step.id)
+        else:
+            effective_deps[step.id] = set()
+
+    # For steps with no explicit depends_on (except the first), create an
+    # implicit dependency on the previous step to maintain sequential order.
+    # This preserves backward compatibility for SOPs that omit depends_on.
+    for i, step in enumerate(sop.steps):
+        if i > 0 and step.id not in has_explicit_deps:
+            prev_step = sop.steps[i - 1]
+            effective_deps[step.id].add(prev_step.id)
+
+    # ------------------------------------------------------------------
+    # 4. Build the forward-edge map: dependents[A] = [B, C] means A -> B, A -> C
+    # ------------------------------------------------------------------
+    dependents: dict[str, list[str]] = {step.id: [] for step in sop.steps}
+
+    for step in sop.steps:
+        for dep_id in effective_deps[step.id]:
+            if dep_id in dependents:
+                dependents[dep_id].append(step.id)
+
+    # ------------------------------------------------------------------
+    # 5. Wire edges
+    # ------------------------------------------------------------------
+    for step in sop.steps:
+        targets = dependents[step.id]
+
+        if step.type == "approval_gate":
+            # Approval gates use conditional routing:
+            #   approved  -> all downstream targets (or END if terminal)
+            #   rejected  -> END
+            if targets:
+                target_set = list(targets)
+
+                if len(target_set) > 1:
+                    # Multiple steps depend on this gate — fan-out to all
+                    # when approved, END when rejected.
+                    def _make_multi_gate_router(gate_targets: list[str]):
+                        def _router(state: SOPGraphState) -> list[str]:
+                            if state.approved:
+                                return gate_targets
+                            return [END]
+                        return _router
+
+                    builder.add_conditional_edges(
+                        step.id,
+                        _make_multi_gate_router(target_set),
+                        # path_map: identity mapping so LangGraph knows all
+                        # possible destinations for graph validation
+                        {t: t for t in target_set + [END]},
+                    )
+                else:
+                    # Single downstream step after the gate
+                    def _make_gate_router(gate_target: str):
+                        def _router(state: SOPGraphState) -> str:
+                            if state.approved:
+                                return "continue"
+                            return "end"
+                        return _router
+
+                    builder.add_conditional_edges(
+                        step.id,
+                        _make_gate_router(target_set[0]),
+                        {"continue": target_set[0], "end": END},
+                    )
             else:
+                # Terminal approval gate (last step) — always go to END
+                builder.add_edge(step.id, END)
+        else:
+            # Normal task step
+            if targets:
+                for target in targets:
+                    builder.add_edge(step.id, target)
+            else:
+                # Terminal step — no downstream consumers, go to END
                 builder.add_edge(step.id, END)
 
     return builder, approval_gate_ids
@@ -378,7 +363,7 @@ def compile_sop_graph(sop_path: Union[str, Path]):
     if cache_key in _sop_graph_cache:
         return _sop_graph_cache[cache_key]
 
-    sop = load_sop(sop_path)
+    sop = load_sop_from_path(sop_path)
     builder, approval_gate_ids = generate_graph_from_sop(sop)
     compiled = builder.compile(
         interrupt_before=approval_gate_ids,
@@ -408,10 +393,8 @@ def _router_entry(state: SOPGraphState) -> dict[str, Any]:
         return {"errors": state.errors + ["No SOP name specified."]}
 
     # Search for the SOP file in known locations
-    _project_root = Path(__file__).resolve().parent.parent.parent
     search_dirs = [
-        _project_root / "workspaces",
-        _project_root / "platform" / "sops",
+        PROJECT_ROOT / "sops",
     ]
 
     sop_path: Optional[Path] = None

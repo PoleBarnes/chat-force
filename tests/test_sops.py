@@ -1,8 +1,7 @@
 """Validate SOP YAML files.
 
-SOPs live in two locations:
-  - platform/sops/ (templates and platform-wide SOPs)
-  - workspaces/{workspace}/sops/ (workspace-specific SOPs)
+SOPs live in:
+  - sops/ (platform-level SOP templates and definitions)
 
 Each SOP must be valid YAML with specific required fields and a coherent
 step structure including approval gates.
@@ -18,8 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # All directories that may contain SOP YAML files
 SOP_DIRS = [
-    PROJECT_ROOT / "workspaces" / "blacktie" / "sops",
-    PROJECT_ROOT / "platform" / "sops",
+    PROJECT_ROOT / "sops",
 ]
 
 REQUIRED_SOP_FIELDS = {"name", "version", "description", "input_schema", "steps", "output_schema"}
@@ -161,7 +159,7 @@ class TestAdCampaignSOP:
 
     @pytest.fixture
     def ad_campaign(self):
-        path = PROJECT_ROOT / "workspaces" / "blacktie" / "sops" / "ad-campaign.yaml"
+        path = PROJECT_ROOT / "sops" / "ad-campaign.yaml"
         assert path.exists(), "ad-campaign.yaml not found"
         return _load_sop(path)
 
