@@ -174,9 +174,11 @@ def _has_assistant_threads(client: WebClient) -> bool:
 # -- Fallback helpers (classic chat.postMessage + chat.update) --------------
 
 
-def _post_status(client: WebClient, channel: str, text: str) -> str:
+def _post_status(
+    client: WebClient, channel: str, text: str, *, thread_ts: str | None = None,
+) -> str:
     """Post a new status message. Returns its ts for later updates."""
-    resp = client.chat_postMessage(channel=channel, text=text)
+    resp = client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
     return resp["ts"]
 
 
@@ -306,6 +308,10 @@ def _handle_user_message(
         log.debug("Skipping duplicate event %s", event_ts)
         return
 
+    # The event's ts is the message timestamp — use it as thread_ts so all
+    # responses are posted as threaded replies to the user's message.
+    thread_ts = event_ts
+
     # Check for an existing session first (fast path, no blocking).
     existing = session_manager.get_session(user_id)
 
@@ -317,38 +323,45 @@ def _handle_user_message(
         # ── Follow-up message in existing session ──
         if use_streaming:
             _set_thread_status(
-                client, channel_id, event_ts or "",
+                client, channel_id, thread_ts or "",
                 "Reading your message...",
                 loading_messages=[],
             )
             try:
                 response = session_manager.send_message(existing, text)
                 _set_thread_status(
-                    client, channel_id, event_ts or "",
+                    client, channel_id, thread_ts or "",
                     "Preparing response...",
                     loading_messages=[],
                 )
                 _stream_response(
                     client, channel_id,
                     response or "_Leo didn't produce a response._",
+                    thread_ts=thread_ts,
                 )
-                _set_thread_status(client, channel_id, event_ts or "", "")
+                _set_thread_status(client, channel_id, thread_ts or "", "")
             except TimeoutError:
                 _stream_response(
                     client, channel_id,
                     ":hourglass: Timed out waiting for Leo. Try again or start a new session.",
+                    thread_ts=thread_ts,
                 )
-                _set_thread_status(client, channel_id, event_ts or "", "")
+                _set_thread_status(client, channel_id, thread_ts or "", "")
             except RuntimeError as exc:
                 log.error("send_message failed for user %s: %s", user_id, exc)
                 _stream_response(
                     client, channel_id,
                     f":warning: Could not deliver message: {exc}",
+                    thread_ts=thread_ts,
                 )
-                _set_thread_status(client, channel_id, event_ts or "", "")
+                _set_thread_status(client, channel_id, thread_ts or "", "")
         else:
             # Fallback: classic postMessage + update pattern.
-            status_ts = _post_status(client, channel_id, ":hourglass_flowing_sand: _Leo is thinking..._")
+            status_ts = _post_status(
+                client, channel_id,
+                ":hourglass_flowing_sand: _Leo is thinking..._",
+                thread_ts=thread_ts,
+            )
             try:
                 response = session_manager.send_message(existing, text)
                 _update_status(client, channel_id, status_ts, response or "_Leo didn't produce a response._")
@@ -362,7 +375,7 @@ def _handle_user_message(
     # ── New session ──
     if use_streaming:
         _set_thread_status(
-            client, channel_id, event_ts or "",
+            client, channel_id, thread_ts or "",
             "Setting up sandbox...",
             loading_messages=[],
         )
@@ -375,7 +388,7 @@ def _handle_user_message(
             enriched_message = text
 
         _set_thread_status(
-            client, channel_id, event_ts or "",
+            client, channel_id, thread_ts or "",
             "Spinning up sandbox...",
             loading_messages=[],
         )
@@ -386,13 +399,17 @@ def _handle_user_message(
             )
         except Exception as exc:
             log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
-            _stream_response(client, channel_id, f":x: Could not start a session: {exc}")
-            _set_thread_status(client, channel_id, event_ts or "", "")
+            _stream_response(
+                client, channel_id,
+                f":x: Could not start a session: {exc}",
+                thread_ts=thread_ts,
+            )
+            _set_thread_status(client, channel_id, thread_ts or "", "")
             return
 
         version = session.sandbox_version
         _set_thread_status(
-            client, channel_id, event_ts or "",
+            client, channel_id, thread_ts or "",
             "Leo is working...",
             loading_messages=[],
         )
@@ -401,7 +418,7 @@ def _handle_user_message(
         try:
             response = session.worker.get_response()
             _set_thread_status(
-                client, channel_id, event_ts or "",
+                client, channel_id, thread_ts or "",
                 "Preparing response...",
                 loading_messages=[],
             )
@@ -409,20 +426,23 @@ def _handle_user_message(
                 client, channel_id,
                 f":package: `main@{version}`\n\n{response}" if response
                 else "_Leo didn't produce a response._",
+                thread_ts=thread_ts,
             )
-            _set_thread_status(client, channel_id, event_ts or "", "")
+            _set_thread_status(client, channel_id, thread_ts or "", "")
         except Exception as exc:
             log.error("Could not get first-turn response: %s", exc, exc_info=True)
             _stream_response(
                 client, channel_id,
                 f":warning: Session started (`main@{version}`) but could not read the response: {exc}",
+                thread_ts=thread_ts,
             )
-            _set_thread_status(client, channel_id, event_ts or "", "")
+            _set_thread_status(client, channel_id, thread_ts or "", "")
     else:
         # Fallback: classic postMessage + update pattern.
         status_ts = _post_status(
             client, channel_id,
-            ":package: *New session* — reading channel history..."
+            ":package: *New session* -- reading channel history...",
+            thread_ts=thread_ts,
         )
 
         # Read channel history for context.
@@ -434,7 +454,7 @@ def _handle_user_message(
 
         _update_status(
             client, channel_id, status_ts,
-            ":package: *New session* — spinning up sandbox..."
+            ":package: *New session* -- spinning up sandbox..."
         )
 
         try:
@@ -449,7 +469,7 @@ def _handle_user_message(
         version = session.sandbox_version
         _update_status(
             client, channel_id, status_ts,
-            f":package: *New session* — sandbox `main@{version}` — _Leo is working..._"
+            f":package: *New session* -- sandbox `main@{version}` -- _Leo is working..._"
         )
 
         # Retrieve the first-turn response and replace the status message.
@@ -517,7 +537,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         except Exception:
             log.error("Unhandled error in message handler:\n%s", traceback.format_exc())
             try:
-                say("\u274c Something went wrong. Check the logs for details.")
+                say("\u274c Something went wrong. Check the logs for details.", thread_ts=event_ts)
             except Exception:
                 pass
 
@@ -536,7 +556,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         # Strip the @mention prefix (e.g. "<@U1234ABC> do something")
         text = re.sub(r"<@[A-Z0-9]+>\s*", "", raw_text).strip()
         if not text:
-            say("Hey! Send me a message and I'll get to work.")
+            say("Hey! Send me a message and I'll get to work.", thread_ts=event_ts)
             return
 
         try:
@@ -544,7 +564,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         except Exception:
             log.error("Unhandled error in mention handler:\n%s", traceback.format_exc())
             try:
-                say("\u274c Something went wrong. Check the logs for details.")
+                say("\u274c Something went wrong. Check the logs for details.", thread_ts=event_ts)
             except Exception:
                 pass
 
