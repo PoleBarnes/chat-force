@@ -81,6 +81,7 @@ class Session:
     sandbox_version: str = ""
     _first_message: str = field(default="", repr=False)
     _ready: threading.Event = field(default_factory=threading.Event, repr=False)
+    _msg_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +224,10 @@ class SessionManager:
             worker = WorkerManager(self.config, run_id, webhook=self._webhook)
             container_id = worker.start(first_message)
 
+            # Mark active before the potentially long wait so the idle
+            # checker doesn't mistake a slow first turn for an idle session.
+            session.last_activity = datetime.now(timezone.utc)
+
             # Wait for the Worker to finish processing the initial task.
             worker.wait_for_completion()
 
@@ -264,13 +269,20 @@ class SessionManager:
         """Send a user message to the Worker and return its response.
 
         Updates ``session.last_activity`` and ``session.message_count``.
+        A per-session lock serializes messages so two concurrent Slack
+        events for the same user cannot interleave writes/reads.
         """
         if session.worker is None:
             raise RuntimeError(f"Session {session.run_id} has no active worker")
 
-        session.worker.send_message(text)
-        session.worker.wait_for_completion()
-        response = session.worker.get_response()
+        # Mark active immediately so the idle checker doesn't close us
+        # during a long-running turn.
+        session.last_activity = datetime.now(timezone.utc)
+
+        with session._msg_lock:
+            session.worker.send_message(text)
+            session.worker.wait_for_completion()
+            response = session.worker.get_response()
 
         with self._lock:
             session.last_activity = datetime.now(timezone.utc)
