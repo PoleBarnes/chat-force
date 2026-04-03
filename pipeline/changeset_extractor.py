@@ -286,6 +286,9 @@ class ChangesetExtractor:
                     continue
                 if _is_noise(path):
                     continue
+                # Skip library/dependency internals
+                if "/node_modules/" in path:
+                    continue
                 # Check if it's an output file worth preserving
                 lower = path.lower()
                 if any(lower.endswith(ext) for ext in self._OUTPUT_EXTENSIONS):

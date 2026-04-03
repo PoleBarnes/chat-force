@@ -37,11 +37,15 @@ class MechanicManager:
         """
         self._ensure_image()
 
-        # Write changeset to a temp directory so we can bind-mount it
+        # Prepare a focused evaluation payload from the full changeset.
+        # The full changeset stays on disk for auditing; the Mechanic gets
+        # only what it needs to make a decision.
+        evaluation = self._prepare_evaluation(changeset)
+
         changeset_dir = tempfile.mkdtemp(prefix="changeset-", dir=self.config.output_base)
         changeset_path = os.path.join(changeset_dir, "changeset.json")
         with open(changeset_path, "w") as f:
-            json.dump(changeset, f, indent=2)
+            json.dump(evaluation, f, indent=2)
 
         output_dir = tempfile.mkdtemp(prefix="mechanic-out-", dir=self.config.output_base)
 
@@ -126,6 +130,81 @@ class MechanicManager:
                 rm=True,
             )
             log.info("Mechanic image built: %s", self.config.mechanic_image)
+
+    @staticmethod
+    def _prepare_evaluation(changeset: dict) -> dict:
+        """Distill the full changeset into a focused evaluation payload.
+
+        The Mechanic needs to review the actual code changes, not wade through
+        thousands of node_modules entries.  The full changeset stays on disk
+        for auditing; this produces the subset the Mechanic can reason about.
+        """
+        git = changeset.get("git_changes", {})
+        docker = changeset.get("docker_changes", {})
+        telemetry = changeset.get("telemetry", {})
+        output = changeset.get("output_files", {})
+
+        # ── Docker changes: summarize instead of listing every path ──
+        added = docker.get("added", [])
+        changed = docker.get("changed", [])
+        deleted = docker.get("deleted", [])
+
+        # Categorise docker changes into meaningful groups
+        categories: dict[str, int] = {}
+        significant_paths: list[str] = []
+        for path in added:
+            if "/node_modules/" in path:
+                categories["node_modules"] = categories.get("node_modules", 0) + 1
+            elif "/.cache/" in path or "/.npm/" in path:
+                categories["caches"] = categories.get("caches", 0) + 1
+            elif "/workspace/config/" in path:
+                significant_paths.append(path)
+            else:
+                categories["other"] = categories.get("other", 0) + 1
+
+        docker_summary = {
+            "total_added": len(added),
+            "total_changed": len(changed),
+            "total_deleted": len(deleted),
+            "categories": categories,
+            "significant_paths": significant_paths[:100],  # cap for safety
+        }
+
+        # ── Telemetry: keep key facts, truncate verbose logs ──
+        logs = telemetry.get("container_logs", "")
+        # Keep last 100 lines of logs (most relevant)
+        log_lines = logs.splitlines()
+        if len(log_lines) > 100:
+            truncated_logs = (
+                f"[...truncated {len(log_lines) - 100} lines...]\n"
+                + "\n".join(log_lines[-100:])
+            )
+        else:
+            truncated_logs = logs
+
+        telemetry_summary = {
+            "exit_code": telemetry.get("exit_code"),
+            "duration_seconds": telemetry.get("duration_seconds"),
+            "started_at": telemetry.get("started_at"),
+            "finished_at": telemetry.get("finished_at"),
+            "container_logs": truncated_logs,
+        }
+
+        # ── Output files: list what was produced ──
+        output_summary = []
+        for f in output.get("files", []):
+            path = f.get("container_path", f.get("local_path", ""))
+            output_summary.append(path)
+
+        return {
+            "run_id": changeset.get("run_id"),
+            "task": changeset.get("task"),
+            "timestamp": changeset.get("timestamp"),
+            "git_changes": git,  # full git changes — this IS the code review
+            "docker_changes_summary": docker_summary,
+            "telemetry": telemetry_summary,
+            "output_files": output_summary,
+        }
 
     @staticmethod
     def _validate_verdict(verdict: dict) -> dict:
