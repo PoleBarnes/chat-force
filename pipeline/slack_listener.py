@@ -192,19 +192,31 @@ def _update_status(client: WebClient, channel: str, ts: str, text: str) -> None:
 
 
 def _set_thread_status(
-    client: WebClient, channel: str, thread_ts: str, status: str,
+    client: WebClient,
+    channel: str,
+    thread_ts: str,
+    status: str,
+    *,
+    loading_messages: list[str] | None = None,
 ) -> None:
     """Set the assistant thread typing indicator / status text.
 
     Uses assistant.threads.setStatus when available, otherwise no-op.
+
+    Pass *loading_messages* to override Slack's default rotating status
+    strings (e.g. "evaluating", "searching").  An empty list disables
+    the rotation entirely so only *status* is shown.
     """
     if _has_assistant_threads(client):
         try:
-            client.assistant_threads_setStatus(
-                channel_id=channel,
-                thread_ts=thread_ts,
-                status=status,
-            )
+            kwargs: dict = {
+                "channel_id": channel,
+                "thread_ts": thread_ts,
+                "status": status,
+            }
+            if loading_messages is not None:
+                kwargs["loading_messages"] = loading_messages
+            client.assistant_threads_setStatus(**kwargs)
         except Exception:
             log.debug("assistant_threads_setStatus failed", exc_info=True)
 
@@ -304,24 +316,36 @@ def _handle_user_message(
     if existing is not None:
         # ── Follow-up message in existing session ──
         if use_streaming:
-            _set_thread_status(client, channel_id, event_ts or "", "Leo is thinking...")
+            _set_thread_status(
+                client, channel_id, event_ts or "",
+                "Reading your message...",
+                loading_messages=[],
+            )
             try:
                 response = session_manager.send_message(existing, text)
+                _set_thread_status(
+                    client, channel_id, event_ts or "",
+                    "Preparing response...",
+                    loading_messages=[],
+                )
                 _stream_response(
                     client, channel_id,
                     response or "_Leo didn't produce a response._",
                 )
+                _set_thread_status(client, channel_id, event_ts or "", "")
             except TimeoutError:
                 _stream_response(
                     client, channel_id,
                     ":hourglass: Timed out waiting for Leo. Try again or start a new session.",
                 )
+                _set_thread_status(client, channel_id, event_ts or "", "")
             except RuntimeError as exc:
                 log.error("send_message failed for user %s: %s", user_id, exc)
                 _stream_response(
                     client, channel_id,
                     f":warning: Could not deliver message: {exc}",
                 )
+                _set_thread_status(client, channel_id, event_ts or "", "")
         else:
             # Fallback: classic postMessage + update pattern.
             status_ts = _post_status(client, channel_id, ":hourglass_flowing_sand: _Leo is thinking..._")
@@ -337,7 +361,11 @@ def _handle_user_message(
 
     # ── New session ──
     if use_streaming:
-        _set_thread_status(client, channel_id, event_ts or "", "Setting up sandbox...")
+        _set_thread_status(
+            client, channel_id, event_ts or "",
+            "Setting up sandbox...",
+            loading_messages=[],
+        )
 
         # Read channel history for context.
         history_context = _read_channel_history(client, channel_id, limit=20)
@@ -346,7 +374,11 @@ def _handle_user_message(
         else:
             enriched_message = text
 
-        _set_thread_status(client, channel_id, event_ts or "", "Spinning up sandbox...")
+        _set_thread_status(
+            client, channel_id, event_ts or "",
+            "Spinning up sandbox...",
+            loading_messages=[],
+        )
 
         try:
             session, _is_new = session_manager.get_or_create_session(
@@ -355,25 +387,37 @@ def _handle_user_message(
         except Exception as exc:
             log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
             _stream_response(client, channel_id, f":x: Could not start a session: {exc}")
+            _set_thread_status(client, channel_id, event_ts or "", "")
             return
 
         version = session.sandbox_version
-        _set_thread_status(client, channel_id, event_ts or "", "Leo is working...")
+        _set_thread_status(
+            client, channel_id, event_ts or "",
+            "Leo is working...",
+            loading_messages=[],
+        )
 
         # Retrieve the first-turn response and stream it.
         try:
             response = session.worker.get_response()
+            _set_thread_status(
+                client, channel_id, event_ts or "",
+                "Preparing response...",
+                loading_messages=[],
+            )
             _stream_response(
                 client, channel_id,
                 f":package: `main@{version}`\n\n{response}" if response
                 else "_Leo didn't produce a response._",
             )
+            _set_thread_status(client, channel_id, event_ts or "", "")
         except Exception as exc:
             log.error("Could not get first-turn response: %s", exc, exc_info=True)
             _stream_response(
                 client, channel_id,
                 f":warning: Session started (`main@{version}`) but could not read the response: {exc}",
             )
+            _set_thread_status(client, channel_id, event_ts or "", "")
     else:
         # Fallback: classic postMessage + update pattern.
         status_ts = _post_status(
