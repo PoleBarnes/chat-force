@@ -87,7 +87,8 @@ def run_pipeline(task: str, config: PipelineConfig, reply_channel: str | None = 
             verdict = mechanic.evaluate(changeset)
             summary["verdict"] = verdict
 
-            disposition = verdict.get("disposition", "pr" if verdict.get("approved") else "discard")
+            # Default: approved → "pr", rejected → continue loop (no disposition = iterate)
+            disposition = verdict.get("disposition", "pr" if verdict.get("approved") else None)
 
             if verdict.get("approved"):
                 # ── APPROVED → create PR ──

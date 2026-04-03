@@ -72,7 +72,7 @@ The `disposition` field tells the pipeline what to do with this changeset:
 
 Use "linear_issue" when: the Worker attempted something fundamentally beyond its current capabilities, discovered an architectural issue, or produced useful research/findings that should be captured even though the code isn't mergeable.
 
-Use "discard" when: the changes are wrong, incomplete with no salvageable insight, or the Worker clearly went off track.
+Use "discard" when: the Worker went completely off track (wrong task, nonsensical output), the output is dangerous and unfixable, or there is truly nothing salvageable. **Do NOT discard when the issues are fixable** — if you can write specific feedback instructions that would fix the problems, use the default disposition (omit the field or set it to "pr") so the feedback loop can iterate. Security issues, missing tests, broken configs, unused dependencies — these are all fixable via feedback.
 
 ## Feedback Loop Awareness
 
