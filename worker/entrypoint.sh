@@ -33,6 +33,9 @@ cat > "$OPENCLAW_DIR/openclaw.json" <<CONF
     "profile": "full",
     "exec": {
       "security": "full"
+    },
+    "elevated": {
+      "enabled": true
     }
   }
 }
