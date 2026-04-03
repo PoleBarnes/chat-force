@@ -101,6 +101,11 @@ openclaw agent \
   --json \
   > /tmp/openclaw-output.json 2>&1 || true
 
+# ── Post-task cleanup ──
+# Remove nested .git directories created by scaffolding tools (npx create-*).
+# These prevent the outer git repo from seeing the files inside.
+find "$WORKSPACE" -mindepth 2 -name .git -type d -exec rm -rf {} + 2>/dev/null || true
+
 echo "[Worker] Task complete"
 
 # ── 8. Signal completion to orchestrator ──

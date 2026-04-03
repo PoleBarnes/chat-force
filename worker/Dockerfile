@@ -6,9 +6,10 @@ FROM ghcr.io/openclaw/openclaw:latest
 
 USER root
 
-# Create directories the entrypoint needs
+# Create directories the entrypoint needs.
+# /workspace is owned by root so the agent can't write outside /workspace/config.
 RUN mkdir -p /workspace/config /home/node/.openclaw && \
-    chown -R node:node /workspace /home/node/.openclaw
+    chown -R node:node /workspace/config /home/node/.openclaw
 
 # Copy entrypoint
 COPY worker/entrypoint.sh /entrypoint.sh
