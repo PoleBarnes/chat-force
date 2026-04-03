@@ -45,6 +45,11 @@ class WebhookServer:
         """
         return self._completion_event.wait(timeout=timeout)
 
+    def reset(self) -> None:
+        """Clear the completion event so we can wait again (for feedback loops)."""
+        self._completion_event.clear()
+        self._last_payload = None
+
     def stop(self) -> None:
         """Shut down the HTTP server."""
         if self._server:

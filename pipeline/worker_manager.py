@@ -2,6 +2,8 @@
 
 import logging
 import os
+import subprocess
+import tempfile
 
 import docker
 from docker.errors import ImageNotFound, NotFound
@@ -29,10 +31,6 @@ class WorkerManager:
         self._ensure_image()
         self._webhook.start()
 
-        # The webhook URL the worker should POST to from inside the container.
-        # host.docker.internal works on Docker Desktop; on Linux the host
-        # gateway is typically 172.17.0.1 but the Docker network alias works
-        # with modern Docker.
         webhook_base = f"http://host.docker.internal:{self.config.webhook_port}"
 
         env = {
@@ -49,7 +47,6 @@ class WorkerManager:
             environment=env,
             network=self.config.docker_network,
             detach=True,
-            # Do NOT use auto_remove -- we need the container for changeset extraction
         )
 
         container_id = self._container.id
@@ -57,28 +54,16 @@ class WorkerManager:
         return container_id
 
     def wait_for_completion(self) -> None:
-        """Block until the worker signals completion, exits, or times out.
-
-        Priority order:
-        1. Webhook task-complete signal
-        2. Container exits on its own
-        3. Timeout
-        """
+        """Block until the worker signals completion, exits, or times out."""
         timeout = self.config.worker_timeout
-
-        # Wait for either webhook signal or container exit
         signaled = self._webhook.wait_for_completion(timeout=timeout)
 
         if signaled:
             log.info("Worker signaled task-complete via webhook")
-            self._webhook.stop()
             return
 
-        # No webhook signal within timeout -- check if the container exited
         self._container.reload()
         status = self._container.status
-
-        self._webhook.stop()
 
         if status in ("exited", "dead"):
             exit_code = self._container.attrs["State"]["ExitCode"]
@@ -88,10 +73,54 @@ class WorkerManager:
                 log.warning("Worker non-zero exit. Last logs:\n%s", logs_tail)
             return
 
-        # Neither signal nor exit -- genuine timeout
         raise TimeoutError(
             f"Worker did not complete within {timeout}s (container status: {status})"
         )
+
+    def send_feedback(self, feedback: str) -> None:
+        """Send Mechanic feedback to the Worker for another iteration.
+
+        Writes the feedback to a file inside the container. The Worker
+        entrypoint polls for this file and sends it to the same OpenClaw
+        session, preserving full context.
+        """
+        if self._container is None:
+            raise RuntimeError("Worker container not running")
+
+        self._container.reload()
+        if self._container.status not in ("running",):
+            raise RuntimeError(
+                f"Worker container is {self._container.status}, cannot send feedback"
+            )
+
+        # Write feedback to a temp file, then docker cp into the container
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write(feedback)
+            tmp_path = f.name
+
+        try:
+            subprocess.run(
+                ["docker", "cp", tmp_path, f"{self._container.id}:/tmp/mechanic-feedback.txt"],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+            log.info("Feedback sent to Worker (%d chars)", len(feedback))
+        finally:
+            os.unlink(tmp_path)
+
+        # Reset the webhook completion event so we can wait again
+        self._webhook.reset()
+
+    def is_alive(self) -> bool:
+        """Check if the Worker container is still running."""
+        if self._container is None:
+            return False
+        try:
+            self._container.reload()
+            return self._container.status == "running"
+        except Exception:
+            return False
 
     def get_logs(self) -> str:
         """Return full container logs as a string."""
@@ -100,7 +129,8 @@ class WorkerManager:
         return self._container.logs().decode(errors="replace")
 
     def cleanup(self) -> None:
-        """Remove the worker container."""
+        """Remove the worker container and stop the webhook server."""
+        self._webhook.stop()
         if self._container is None:
             return
         try:

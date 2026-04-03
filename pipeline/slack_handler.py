@@ -39,7 +39,7 @@ class SlackHandler:
     # -- public API -----------------------------------------------------------
 
     def notify_approved(self, run_id: str, task: str, pr_url: str) -> None:
-        """Post an approval notification with the PR link."""
+        """PR was created."""
         text = (
             f"*PR Created* — run `{run_id}`\n"
             f"Task: {task}\n"
@@ -48,11 +48,23 @@ class SlackHandler:
         self._post(text)
 
     def notify_rejected(self, run_id: str, task: str, reason: str) -> None:
-        """Post a rejection notification with the reason."""
+        """Changes discarded."""
         text = (
-            f"*Rejected* — run `{run_id}`\n"
+            f"*Changes Discarded* — run `{run_id}`\n"
             f"Task: {task}\n"
             f"Reason: {reason}"
+        )
+        self._post(text)
+
+    def notify_linear_proposal(self, run_id: str, task: str, verdict: dict) -> None:
+        """Propose creating a Linear issue for architectural findings."""
+        reason = verdict.get("disposition_reason", verdict.get("summary", ""))
+        text = (
+            f"*Findings Worth Tracking* — run `{run_id}`\n"
+            f"Task: {task}\n"
+            f"\n{reason}\n"
+            f"\nWould you like me to create a Linear issue with these findings?\n"
+            f"React with :white_check_mark: to create, or :x: to skip."
         )
         self._post(text)
 
@@ -71,5 +83,4 @@ class SlackHandler:
             )
             log.debug("Slack message sent to %s", self._channel)
         except Exception:
-            # Never crash the pipeline because of a notification failure.
             log.warning("Failed to send Slack message", exc_info=True)

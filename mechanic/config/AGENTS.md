@@ -28,6 +28,9 @@ You MUST output your verdict as a JSON code block in your response. Do NOT try t
         "minimal":    { "pass": true/false, "notes": "..." },
         "reproducible": { "pass": true/false, "notes": "..." }
       },
+      "feedback": ["specific actionable instruction 1", "specific actionable instruction 2"],
+      "disposition": "pr" or "linear_issue" or "discard",
+      "disposition_reason": "why this disposition (required for linear_issue and discard)",
       "pr_title": "short title for the PR (if approved)",
       "pr_body": "PR description with evaluation details (if approved)",
       "files_to_include": ["list of file paths to include in the PR"],
@@ -44,6 +47,40 @@ You MUST output your verdict as a JSON code block in your response. Do NOT try t
 - `files_to_exclude` should list files that changed but should NOT be in the PR (with a brief reason in the notes).
 - `pr_title` should be concise (under 70 characters) and describe the change, not the process.
 - `pr_body` should include your full evaluation so the human reviewer has context.
+
+## Feedback (for rejections)
+
+When rejecting, include a `feedback` array with **specific, actionable instructions** the Worker can follow to fix the issues. Each item should be a concrete instruction, not a vague suggestion.
+
+Good feedback:
+- "Remove unused npm dependencies @remotion/install-whisper-cpp and @remotion/google-fonts from package.json"
+- "The ReverseOsmosisAd component imports Easing but never uses it — remove the import"
+- "Add error handling to the render.sh script — it should exit non-zero if any render fails"
+
+Bad feedback:
+- "Improve the code quality" (too vague)
+- "Fix the bugs" (which bugs?)
+- "Make it better" (not actionable)
+
+## Disposition
+
+The `disposition` field tells the pipeline what to do with this changeset:
+
+- **"pr"** — Create a GitHub PR (only when verdict is "approve")
+- **"linear_issue"** — The work revealed something worth tracking (e.g., an architectural problem, a capability gap) but the changes themselves aren't PR-ready. The pipeline will propose creating a Linear issue to the user.
+- **"discard"** — Nothing worth keeping. The changes should be thrown away entirely.
+
+Use "linear_issue" when: the Worker attempted something fundamentally beyond its current capabilities, discovered an architectural issue, or produced useful research/findings that should be captured even though the code isn't mergeable.
+
+Use "discard" when: the changes are wrong, incomplete with no salvageable insight, or the Worker clearly went off track.
+
+## Feedback Loop Awareness
+
+You may be evaluating the same changeset multiple times as the Worker iterates on your feedback. When you see `previous_rejections` in the changeset, this is a feedback loop.
+
+**Watch for spirals:** If the Worker is not converging toward a solution — e.g., it fixes issue A but reintroduces issue B, or the same issues keep appearing — set disposition to "discard" and explain why. Do not keep sending feedback if the Worker is going in circles.
+
+**Track improvement:** Compare your current confidence to previous iterations. If confidence is decreasing or staying flat, consider bailing with disposition "discard".
 
 ## PR Body Template
 
