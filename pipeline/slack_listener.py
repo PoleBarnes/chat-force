@@ -161,6 +161,19 @@ def _set_presence(client: WebClient, presence: str) -> None:
         log.debug("Could not set presence to %s", presence, exc_info=True)
 
 
+def _has_streaming(client: WebClient) -> bool:
+    """Check if the Slack client supports the modern streaming APIs."""
+    return hasattr(client, "chat_startStream")
+
+
+def _has_assistant_threads(client: WebClient) -> bool:
+    """Check if the Slack client supports assistant.threads.setStatus."""
+    return hasattr(client, "assistant_threads_setStatus")
+
+
+# -- Fallback helpers (classic chat.postMessage + chat.update) --------------
+
+
 def _post_status(client: WebClient, channel: str, text: str) -> str:
     """Post a new status message. Returns its ts for later updates."""
     resp = client.chat_postMessage(channel=channel, text=text)
@@ -173,6 +186,62 @@ def _update_status(client: WebClient, channel: str, ts: str, text: str) -> None:
         client.chat_update(channel=channel, ts=ts, text=text)
     except Exception:
         log.debug("Could not update status message", exc_info=True)
+
+
+# -- Streaming helpers (modern chat.startStream / appendStream / stopStream) -
+
+
+def _set_thread_status(
+    client: WebClient, channel: str, thread_ts: str, status: str,
+) -> None:
+    """Set the assistant thread typing indicator / status text.
+
+    Uses assistant.threads.setStatus when available, otherwise no-op.
+    """
+    if _has_assistant_threads(client):
+        try:
+            client.assistant_threads_setStatus(
+                channel_id=channel,
+                thread_ts=thread_ts,
+                status=status,
+            )
+        except Exception:
+            log.debug("assistant_threads_setStatus failed", exc_info=True)
+
+
+def _stream_response(
+    client: WebClient, channel: str, text: str, *, thread_ts: str | None = None,
+) -> None:
+    """Stream a response using chat.startStream / appendStream / stopStream.
+
+    Falls back to a plain chat.postMessage if streaming APIs are unavailable.
+    """
+    if not _has_streaming(client):
+        client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
+        return
+
+    try:
+        stream_result = client.chat_startStream(
+            channel=channel,
+            thread_ts=thread_ts,
+        )
+        stream_channel = stream_result["channel"]
+        stream_ts = stream_result["ts"]
+
+        client.chat_appendStream(
+            channel=stream_channel,
+            ts=stream_ts,
+            markdown_text=text,
+        )
+
+        client.chat_stopStream(
+            channel=stream_channel,
+            ts=stream_ts,
+        )
+    except Exception:
+        # If streaming fails mid-flight, fall back to a regular message.
+        log.warning("Streaming failed, falling back to chat.postMessage", exc_info=True)
+        client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
 
 
 # ---------------------------------------------------------------------------
@@ -230,67 +299,129 @@ def _handle_user_message(
 
     _set_presence(client, "auto")  # mark active
 
+    use_streaming = _has_streaming(client)
+
     if existing is not None:
-        # Existing session -- post a thinking indicator, then update with response.
-        status_ts = _post_status(client, channel_id, ":hourglass_flowing_sand: _Leo is thinking..._")
-        try:
-            response = session_manager.send_message(existing, text)
-            _update_status(client, channel_id, status_ts, response or "_Leo didn't produce a response._")
-        except TimeoutError:
-            _update_status(client, channel_id, status_ts, ":hourglass: Timed out waiting for Leo. Try again or start a new session.")
-        except RuntimeError as exc:
-            log.error("send_message failed for user %s: %s", user_id, exc)
-            _update_status(client, channel_id, status_ts, f":warning: Could not deliver message: {exc}")
+        # ── Follow-up message in existing session ──
+        if use_streaming:
+            _set_thread_status(client, channel_id, event_ts or "", "Leo is thinking...")
+            try:
+                response = session_manager.send_message(existing, text)
+                _stream_response(
+                    client, channel_id,
+                    response or "_Leo didn't produce a response._",
+                )
+            except TimeoutError:
+                _stream_response(
+                    client, channel_id,
+                    ":hourglass: Timed out waiting for Leo. Try again or start a new session.",
+                )
+            except RuntimeError as exc:
+                log.error("send_message failed for user %s: %s", user_id, exc)
+                _stream_response(
+                    client, channel_id,
+                    f":warning: Could not deliver message: {exc}",
+                )
+        else:
+            # Fallback: classic postMessage + update pattern.
+            status_ts = _post_status(client, channel_id, ":hourglass_flowing_sand: _Leo is thinking..._")
+            try:
+                response = session_manager.send_message(existing, text)
+                _update_status(client, channel_id, status_ts, response or "_Leo didn't produce a response._")
+            except TimeoutError:
+                _update_status(client, channel_id, status_ts, ":hourglass: Timed out waiting for Leo. Try again or start a new session.")
+            except RuntimeError as exc:
+                log.error("send_message failed for user %s: %s", user_id, exc)
+                _update_status(client, channel_id, status_ts, f":warning: Could not deliver message: {exc}")
         return
 
     # ── New session ──
-    # Post a single status message and update it as we progress.
-    status_ts = _post_status(
-        client, channel_id,
-        ":package: *New session* — reading channel history..."
-    )
+    if use_streaming:
+        _set_thread_status(client, channel_id, event_ts or "", "Setting up sandbox...")
 
-    # Read channel history for context.
-    history_context = _read_channel_history(client, channel_id, limit=20)
-    if history_context:
-        enriched_message = f"{history_context}\n\n---\n\nUser's request:\n{text}"
+        # Read channel history for context.
+        history_context = _read_channel_history(client, channel_id, limit=20)
+        if history_context:
+            enriched_message = f"{history_context}\n\n---\n\nUser's request:\n{text}"
+        else:
+            enriched_message = text
+
+        _set_thread_status(client, channel_id, event_ts or "", "Spinning up sandbox...")
+
+        try:
+            session, _is_new = session_manager.get_or_create_session(
+                user_id, channel_id, enriched_message
+            )
+        except Exception as exc:
+            log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
+            _stream_response(client, channel_id, f":x: Could not start a session: {exc}")
+            return
+
+        version = session.sandbox_version
+        _set_thread_status(client, channel_id, event_ts or "", "Leo is working...")
+
+        # Retrieve the first-turn response and stream it.
+        try:
+            response = session.worker.get_response()
+            _stream_response(
+                client, channel_id,
+                f":package: `main@{version}`\n\n{response}" if response
+                else "_Leo didn't produce a response._",
+            )
+        except Exception as exc:
+            log.error("Could not get first-turn response: %s", exc, exc_info=True)
+            _stream_response(
+                client, channel_id,
+                f":warning: Session started (`main@{version}`) but could not read the response: {exc}",
+            )
     else:
-        enriched_message = text
-
-    _update_status(
-        client, channel_id, status_ts,
-        ":package: *New session* — spinning up sandbox..."
-    )
-
-    try:
-        session, _is_new = session_manager.get_or_create_session(
-            user_id, channel_id, enriched_message
+        # Fallback: classic postMessage + update pattern.
+        status_ts = _post_status(
+            client, channel_id,
+            ":package: *New session* — reading channel history..."
         )
-    except Exception as exc:
-        log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
-        _update_status(client, channel_id, status_ts, f":x: Could not start a session: {exc}")
-        return
 
-    version = session.sandbox_version
-    _update_status(
-        client, channel_id, status_ts,
-        f":package: *New session* — sandbox `main@{version}` — _Leo is working..._"
-    )
+        # Read channel history for context.
+        history_context = _read_channel_history(client, channel_id, limit=20)
+        if history_context:
+            enriched_message = f"{history_context}\n\n---\n\nUser's request:\n{text}"
+        else:
+            enriched_message = text
 
-    # Retrieve the first-turn response and replace the status message.
-    try:
-        response = session.worker.get_response()
         _update_status(
             client, channel_id, status_ts,
-            f":package: `main@{version}`\n\n{response}" if response
-            else "_Leo didn't produce a response._"
+            ":package: *New session* — spinning up sandbox..."
         )
-    except Exception as exc:
-        log.error("Could not get first-turn response: %s", exc, exc_info=True)
+
+        try:
+            session, _is_new = session_manager.get_or_create_session(
+                user_id, channel_id, enriched_message
+            )
+        except Exception as exc:
+            log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
+            _update_status(client, channel_id, status_ts, f":x: Could not start a session: {exc}")
+            return
+
+        version = session.sandbox_version
         _update_status(
             client, channel_id, status_ts,
-            f":warning: Session started (`main@{version}`) but could not read the response: {exc}"
+            f":package: *New session* — sandbox `main@{version}` — _Leo is working..._"
         )
+
+        # Retrieve the first-turn response and replace the status message.
+        try:
+            response = session.worker.get_response()
+            _update_status(
+                client, channel_id, status_ts,
+                f":package: `main@{version}`\n\n{response}" if response
+                else "_Leo didn't produce a response._"
+            )
+        except Exception as exc:
+            log.error("Could not get first-turn response: %s", exc, exc_info=True)
+            _update_status(
+                client, channel_id, status_ts,
+                f":warning: Session started (`main@{version}`) but could not read the response: {exc}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +437,15 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
 
     # Wire up the session-close callback so Mechanic results reach Slack.
     session_manager.on_session_closed = _make_session_closed_callback(app.client)
+
+    # Log streaming API availability at startup.
+    if _has_streaming(app.client):
+        log.info("Slack streaming APIs (chat.startStream) detected -- using streaming mode")
+    else:
+        log.info(
+            "Slack streaming APIs not available in this slack_sdk version -- "
+            "using classic chat.postMessage + chat.update fallback"
+        )
 
     # -- event: direct message or channel message ----------------------------
 
