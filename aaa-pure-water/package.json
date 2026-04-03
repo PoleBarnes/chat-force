@@ -1,0 +1,21 @@
+{
+  "name": "aaa-pure-water-ads",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render",
+    "render-all": "node render-all.mjs"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.301",
+    "@remotion/renderer": "^4.0.301",
+    "react": "^19",
+    "react-dom": "^19",
+    "remotion": "4.0.301"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "typescript": "^5"
+  }
+}
