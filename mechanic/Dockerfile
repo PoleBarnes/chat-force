@@ -3,13 +3,15 @@
 
 FROM ghcr.io/openclaw/openclaw:latest
 
-# Install gh CLI for PR creation support
-RUN apt-get update && apt-get install -y gh git && rm -rf /var/lib/apt/lists/*
+# git is already in the base image; workspace dir may not exist yet
+USER root
+RUN mkdir -p /home/node/.openclaw/workspace && chown node:node /home/node/.openclaw/workspace
+USER node
 
 # Copy Mechanic workspace config
-COPY config/SOUL.md /home/node/.openclaw/workspace/SOUL.md
-COPY config/IDENTITY.md /home/node/.openclaw/workspace/IDENTITY.md
-COPY config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
+COPY --chown=node:node config/SOUL.md /home/node/.openclaw/workspace/SOUL.md
+COPY --chown=node:node config/IDENTITY.md /home/node/.openclaw/workspace/IDENTITY.md
+COPY --chown=node:node config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
 
 # The orchestrator mounts at runtime:
 #   /changeset:ro — the changeset bundle from the Worker

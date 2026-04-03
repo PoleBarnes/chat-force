@@ -5,6 +5,9 @@ set -euo pipefail
 : "${TASK_INSTRUCTION:?TASK_INSTRUCTION env var is required}"
 : "${ANTHROPIC_AUTH_TOKEN:?ANTHROPIC_AUTH_TOKEN env var is required}"
 
+# OpenClaw --local mode reads ANTHROPIC_API_KEY from the environment
+export ANTHROPIC_API_KEY="${ANTHROPIC_AUTH_TOKEN}"
+
 echo "[Worker] Starting OpenClaw with task: ${TASK_INSTRUCTION}"
 
 # Initialize git in the config directory so we can diff later
@@ -12,8 +15,9 @@ cd /workspace/config
 git add -A
 git commit -m "baseline" --allow-empty 2>/dev/null || true
 
-# Run the task via OpenClaw CLI
+# Run the task via OpenClaw CLI (--local mode, no Gateway needed)
 openclaw agent \
+  --local \
   --agent main \
   --message "${TASK_INSTRUCTION}" \
   --json \
