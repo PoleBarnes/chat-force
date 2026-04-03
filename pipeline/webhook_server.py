@@ -12,15 +12,19 @@ class WebhookServer:
     """Receives webhook callbacks from the Worker container.
 
     Listens for POST /hooks/after-turn (logged) and POST /hooks/task-complete
-    (sets the completion event).  Runs in a daemon thread so it won't block
-    process shutdown.
+    (sets the completion event for the specific container).  Runs in a daemon
+    thread so it won't block process shutdown.
+
+    Completions are tracked **per container ID** so that multiple concurrent
+    sessions don't interfere with each other.
     """
 
     def __init__(self, host: str, port: int):
         self.host = host
         self.port = port
-        self._completion_event = threading.Event()
-        self._last_payload: dict | None = None
+        self._events: dict[str, threading.Event] = {}
+        self._payloads: dict[str, dict] = {}
+        self._lock = threading.Lock()
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -38,17 +42,58 @@ class WebhookServer:
         self._thread.start()
         log.info("Webhook server listening on %s:%s", self.host, self.port)
 
-    def wait_for_completion(self, timeout: int) -> bool:
+    def register(self, container_id: str) -> None:
+        """Register a container for completion tracking."""
+        with self._lock:
+            self._events[container_id] = threading.Event()
+            self._payloads.pop(container_id, None)
+
+    def wait_for_completion(self, container_id: str | None = None, timeout: int = 300) -> bool:
         """Block until task-complete signal or *timeout* seconds elapse.
+
+        If *container_id* is given, waits for that specific container's
+        completion event.  If None (CLI mode / backward compat), waits for
+        any registered container.
 
         Returns True if the signal was received, False on timeout.
         """
-        return self._completion_event.wait(timeout=timeout)
+        if container_id is not None:
+            event = self._events.get(container_id)
+            if event is None:
+                raise ValueError(f"Container {container_id} not registered")
+            return event.wait(timeout=timeout)
 
-    def reset(self) -> None:
-        """Clear the completion event so we can wait again (for feedback loops)."""
-        self._completion_event.clear()
-        self._last_payload = None
+        # Backward-compat: wait for any registered event (CLI single-container mode).
+        with self._lock:
+            events = list(self._events.values())
+        if not events:
+            # No containers registered — fall back to a bare event that never fires.
+            return threading.Event().wait(timeout=timeout)
+        # In CLI mode there's only one; wait on it.
+        return events[0].wait(timeout=timeout)
+
+    def reset(self, container_id: str | None = None) -> None:
+        """Clear completion event(s) so we can wait again (for feedback loops).
+
+        If *container_id* is given, resets only that container's state.
+        If None (CLI mode / backward compat), resets ALL containers.
+        """
+        with self._lock:
+            if container_id is not None:
+                event = self._events.get(container_id)
+                if event:
+                    event.clear()
+                self._payloads.pop(container_id, None)
+            else:
+                for event in self._events.values():
+                    event.clear()
+                self._payloads.clear()
+
+    def unregister(self, container_id: str) -> None:
+        """Remove a container from tracking."""
+        with self._lock:
+            self._events.pop(container_id, None)
+            self._payloads.pop(container_id, None)
 
     def stop(self) -> None:
         """Shut down the HTTP server."""
@@ -56,9 +101,15 @@ class WebhookServer:
             self._server.shutdown()
             log.info("Webhook server stopped")
 
-    @property
-    def last_payload(self) -> dict | None:
-        return self._last_payload
+    def last_payload(self, container_id: str | None = None) -> dict | None:
+        """Return the last payload for *container_id*, or any if None."""
+        with self._lock:
+            if container_id is not None:
+                return self._payloads.get(container_id)
+            # Backward compat: return the first available payload.
+            for payload in self._payloads.values():
+                return payload
+            return None
 
     # -- internals ------------------------------------------------------------
 
@@ -76,9 +127,33 @@ class WebhookServer:
                     payload = {}
 
                 if self.path == "/hooks/task-complete":
-                    log.info("Received task-complete signal")
-                    server_ref._last_payload = payload
-                    server_ref._completion_event.set()
+                    container_id = payload.get("container_id", "")
+                    log.info("Received task-complete signal (container: %s)", container_id[:12] or "unknown")
+
+                    with server_ref._lock:
+                        event = server_ref._events.get(container_id)
+                        if event:
+                            server_ref._payloads[container_id] = payload
+                            event.set()
+                        else:
+                            # Try matching by hostname prefix — container IDs are
+                            # 64 hex chars but the hostname inside the container
+                            # is the first 12, so the payload may send a short ID.
+                            matched = False
+                            for cid, evt in server_ref._events.items():
+                                if cid.startswith(container_id) or container_id.startswith(cid[:12]):
+                                    server_ref._payloads[cid] = payload
+                                    evt.set()
+                                    matched = True
+                                    break
+                            if not matched:
+                                log.warning(
+                                    "task-complete for unknown container %s; "
+                                    "registered: %s",
+                                    container_id[:12],
+                                    [c[:12] for c in server_ref._events],
+                                )
+
                     self._respond(200, {"status": "accepted"})
 
                 elif self.path == "/hooks/after-turn":

@@ -170,29 +170,36 @@ class SessionManager:
             else:
                 pending = None
 
+            if pending is None:
+                # Reserve the slot atomically (same lock acquisition as the
+                # check above) so a concurrent call for the same user_id
+                # cannot also see "no session" and start a second container.
+                placeholder_run_id = _generate_run_id()
+                session = Session(
+                    user_id=user_id,
+                    channel_id=channel_id,
+                    run_id=placeholder_run_id,
+                    container_id="",
+                    worker=None,  # type: ignore[arg-type]
+                    created_at=datetime.now(timezone.utc),
+                    last_activity=datetime.now(timezone.utc),
+                    sandbox_version="",
+                    _first_message=first_message,
+                )
+                self._sessions[user_id] = session
+
         # If another thread is already creating a session, wait for it.
         if pending is not None:
             pending._ready.wait(timeout=self._idle_timeout)
+            # The creating thread may have failed and removed the session.
+            # Check that the session is still registered and has a worker.
+            with self._lock:
+                current = self._sessions.get(user_id)
+            if current is None or current.worker is None:
+                raise RuntimeError(
+                    f"Session creation for user {user_id} failed (waited on placeholder)"
+                )
             return pending, False
-
-        with self._lock:
-
-            # Reserve the slot before releasing the lock so a concurrent call
-            # for the same user_id doesn't start a second container.  We'll
-            # fill in the real fields once the container is up.
-            placeholder_run_id = _generate_run_id()
-            session = Session(
-                user_id=user_id,
-                channel_id=channel_id,
-                run_id=placeholder_run_id,
-                container_id="",
-                worker=None,  # type: ignore[arg-type]
-                created_at=datetime.now(timezone.utc),
-                last_activity=datetime.now(timezone.utc),
-                sandbox_version="",
-                _first_message=first_message,
-            )
-            self._sessions[user_id] = session
 
         # Container startup happens outside the lock so we don't block other
         # users.  If it fails we remove the reservation.
@@ -231,6 +238,9 @@ class SessionManager:
             return session, True
 
         except Exception:
+            # Wake any threads waiting on this placeholder BEFORE removing
+            # it, so they don't block for the full timeout duration.
+            session._ready.set()
             # Roll back the reservation so the user can retry.
             with self._lock:
                 self._sessions.pop(user_id, None)
@@ -502,6 +512,10 @@ class SessionManager:
 
     def _cleanup_session(self, session: Session) -> None:
         """Save worker logs and remove the container."""
+        if session.worker is None:
+            log.debug("[%s] No worker to clean up (placeholder session)", session.run_id)
+            return
+
         run_dir = os.path.join(self.config.output_base, session.run_id)
 
         # Save worker logs before killing the container.

@@ -38,9 +38,6 @@ class WorkerManager:
         if self._owns_webhook:
             self._webhook.start()
 
-        # Reset completion event before each new container
-        self._webhook.reset()
-
         webhook_base = f"http://host.docker.internal:{self.config.webhook_port}"
 
         env = {
@@ -60,13 +57,18 @@ class WorkerManager:
         )
 
         container_id = self._container.id
+
+        # Register this container for per-container completion tracking.
+        self._webhook.register(container_id)
+
         log.info("Worker container started: %s (%s)", self._container.name, container_id[:12])
         return container_id
 
     def wait_for_completion(self) -> None:
         """Block until the worker signals completion, exits, or times out."""
         timeout = self.config.worker_timeout
-        signaled = self._webhook.wait_for_completion(timeout=timeout)
+        container_id = self._container.id if self._container else None
+        signaled = self._webhook.wait_for_completion(container_id=container_id, timeout=timeout)
 
         if signaled:
             log.info("Worker signaled task-complete via webhook")
@@ -103,6 +105,10 @@ class WorkerManager:
                 f"Worker container is {self._container.status}, cannot send message"
             )
 
+        # Reset BEFORE writing the file so a fast container response isn't
+        # lost (the event must be clear before the container can see the message).
+        self._webhook.reset(self._container.id)
+
         # Write message to a temp file, then docker cp into the container
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write(message)
@@ -118,9 +124,6 @@ class WorkerManager:
             log.info("Message sent to Worker (%d chars)", len(message))
         finally:
             os.unlink(tmp_path)
-
-        # Reset the webhook completion event so we can wait again
-        self._webhook.reset()
 
     def send_feedback(self, feedback: str) -> None:
         """Backward-compatible alias for send_message()."""
@@ -173,6 +176,13 @@ class WorkerManager:
 
     def cleanup(self) -> None:
         """Remove the worker container (and webhook server if we own it)."""
+        if self._container is not None:
+            # Unregister from webhook tracking before removing the container.
+            try:
+                self._webhook.unregister(self._container.id)
+            except Exception:
+                log.debug("Could not unregister container from webhook", exc_info=True)
+
         if self._owns_webhook:
             self._webhook.stop()
         if self._container is None:

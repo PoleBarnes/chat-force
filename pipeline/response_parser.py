@@ -16,8 +16,9 @@ def parse_response(raw: str) -> str:
     Handles malformed JSON gracefully (returns empty string).
 
     The raw output may have non-JSON prefix lines (log lines from stderr
-    mixed in). We find the JSON starting with ``{"payloads"`` and parse
-    from there.
+    mixed in).  We find the *last* JSON object containing ``"payloads"``
+    and parse from there — the last one is the actual OpenClaw response
+    when multiple JSON blobs or log lines are present.
     """
     if not raw or not raw.strip():
         return ""
@@ -50,43 +51,79 @@ def parse_response(raw: str) -> str:
 
 
 def _extract_json(raw: str) -> str | None:
-    """Find the first JSON object starting with {"payloads" in the raw output."""
-    # Fast path: the whole string is valid JSON
+    """Find the last JSON object containing ``"payloads"`` in the raw output.
+
+    OpenClaw CLI output often has log lines (and possibly other JSON blobs)
+    before the actual response.  We search for every ``{"payloads"`` occurrence,
+    extract each balanced JSON object, and return the last valid one.  This
+    handles mixed log output and multiple JSON objects reliably.
+    """
+    # Collect all candidate positions where '{"payloads"' appears
+    matches = list(re.finditer(r'\{"payloads"', raw))
+
+    if matches:
+        # Walk matches in reverse — the last one is most likely the real response
+        for match in reversed(matches):
+            candidate = _extract_balanced_json(raw, match.start())
+            if candidate is not None:
+                return candidate
+
+    # Fallback: no '{"payloads"' found — try to find *any* top-level JSON object.
+    # This handles the edge case where the output is a single clean JSON blob
+    # that starts with a different key order (e.g. {"meta":..., "payloads":...}).
     stripped = raw.strip()
-    if stripped.startswith("{"):
-        return stripped
+    if stripped.startswith("{") and stripped.endswith("}"):
+        # Validate it's actually parseable JSON before returning
+        try:
+            json.loads(stripped)
+            return stripped
+        except json.JSONDecodeError:
+            pass
 
-    # Look for the JSON object start pattern
-    match = re.search(r'\{"payloads"', raw)
-    if match is None:
-        return None
+    # Last resort: try to find any JSON object on individual lines
+    for line in reversed(raw.splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                data = json.loads(line)
+                if "payloads" in data:
+                    return line
+            except json.JSONDecodeError:
+                continue
 
-    # Extract from the match to end-of-string and try to parse
-    candidate = raw[match.start():]
+    return None
 
-    # Find the matching closing brace by tracking nesting
+
+def _extract_balanced_json(raw: str, start: int) -> str | None:
+    """Extract a balanced JSON object from *raw* beginning at *start*.
+
+    Tracks brace nesting while respecting JSON string escaping.
+    Returns the substring for the balanced object, or ``None`` if the
+    braces never balance.
+    """
     depth = 0
     in_string = False
     escape = False
-    for i, ch in enumerate(candidate):
+
+    for i in range(start, len(raw)):
+        ch = raw[i]
         if escape:
             escape = False
             continue
-        if ch == "\\":
-            if in_string:
-                escape = True
-            continue
-        if ch == '"' and not escape:
-            in_string = not in_string
-            continue
         if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
             continue
-        if ch == "{":
+        # Outside a string
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
             depth += 1
         elif ch == "}":
             depth -= 1
             if depth == 0:
-                return candidate[: i + 1]
+                return raw[start : i + 1]
 
-    # If we couldn't find balanced braces, return the whole candidate
-    return candidate
+    return None

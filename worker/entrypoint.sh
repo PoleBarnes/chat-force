@@ -100,7 +100,7 @@ run_openclaw_turn() {
     --message "$message" \
     --timeout "${AGENT_TIMEOUT:-1800}" \
     --json \
-    > "$output_file" 2>&1 || true
+    > "$output_file" 2>/tmp/openclaw-stderr.log || true
 
   # Write latest response (overwritten each turn)
   cp "$output_file" /tmp/latest-response.json

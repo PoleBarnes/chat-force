@@ -17,6 +17,8 @@ import os
 import re
 import signal
 import sys
+import threading
+import time
 import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -174,6 +176,33 @@ def _update_status(client: WebClient, channel: str, ts: str, text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Event deduplication (app_mention + message double-fire)
+# ---------------------------------------------------------------------------
+
+# Slack fires both `message` and `app_mention` for @-mentions.  We track
+# recently-handled event timestamps so only the first handler runs.
+_seen_events: dict[str, float] = {}   # event_ts -> wall-clock time
+_seen_events_lock = threading.Lock()
+_SEEN_EVENT_TTL = 60  # seconds to remember an event
+
+
+def _is_duplicate_event(event_ts: str) -> bool:
+    """Return True if this event_ts was already processed recently."""
+    now = time.monotonic()
+
+    with _seen_events_lock:
+        # Periodic purge of stale entries.
+        stale = [ts for ts, t in _seen_events.items() if now - t > _SEEN_EVENT_TTL]
+        for ts in stale:
+            del _seen_events[ts]
+
+        if event_ts in _seen_events:
+            return True
+        _seen_events[event_ts] = now
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Core message routing
 # ---------------------------------------------------------------------------
 
@@ -185,8 +214,16 @@ def _handle_user_message(
     say,
     client: WebClient,
     session_manager: SessionManager,
+    *,
+    event_ts: str | None = None,
 ) -> None:
     """Route an incoming user message through the session manager."""
+
+    # De-duplicate: Slack sends both `message` and `app_mention` for
+    # @-mentions.  Whichever handler fires first wins; the second is a no-op.
+    if event_ts is not None and _is_duplicate_event(event_ts):
+        log.debug("Skipping duplicate event %s", event_ts)
+        return
 
     # Check for an existing session first (fast path, no blocking).
     existing = session_manager.get_session(user_id)
@@ -277,6 +314,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         user_id = event.get("user")
         channel_id = event.get("channel")
         text = event.get("text", "")
+        event_ts = event.get("event_ts") or event.get("ts")
 
         # Skip bot messages to prevent infinite loops.
         if event.get("bot_id") or event.get("subtype") or not user_id:
@@ -286,7 +324,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
             return
 
         try:
-            _handle_user_message(user_id, channel_id, text, say, client, session_manager)
+            _handle_user_message(user_id, channel_id, text, say, client, session_manager, event_ts=event_ts)
         except Exception:
             log.error("Unhandled error in message handler:\n%s", traceback.format_exc())
             try:
@@ -301,6 +339,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         user_id = event.get("user")
         channel_id = event.get("channel")
         raw_text = event.get("text", "")
+        event_ts = event.get("event_ts") or event.get("ts")
 
         if not user_id:
             return
@@ -312,7 +351,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
             return
 
         try:
-            _handle_user_message(user_id, channel_id, text, say, client, session_manager)
+            _handle_user_message(user_id, channel_id, text, say, client, session_manager, event_ts=event_ts)
         except Exception:
             log.error("Unhandled error in mention handler:\n%s", traceback.format_exc())
             try:

@@ -4,6 +4,7 @@ Tests verify pipeline components work together at the unit level, mocking
 Docker and external services. Covers:
   - PipelineConfig defaults and output directory creation
   - WebhookServer lifecycle and HTTP handler behavior
+  - ResponseParser JSON extraction and edge cases
   - ChangesetExtractor noise filtering and extraction orchestration
   - MechanicManager verdict normalisation
   - PRCreator slugification and branch naming
@@ -23,12 +24,160 @@ import pytest
 
 from pipeline.config import PipelineConfig
 from pipeline.webhook_server import WebhookServer
+from pipeline.response_parser import parse_response
 from pipeline.changeset_extractor import ChangesetExtractor, _is_noise
 from pipeline.mechanic_manager import MechanicManager
 from pipeline.pr_creator import PRCreator, _slugify
 from pipeline.slack_handler import SlackHandler
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+# =========================================================================
+# ResponseParser tests
+# =========================================================================
+
+
+class TestParseResponse:
+    """Test parse_response handles OpenClaw output edge cases."""
+
+    def test_clean_json(self):
+        """Clean JSON with payloads should return joined text."""
+        raw = json.dumps({
+            "payloads": [{"text": "Hello world", "mediaUrl": None}],
+            "meta": {},
+        })
+        assert parse_response(raw) == "Hello world"
+
+    def test_multiple_payloads(self):
+        """Multiple text payloads should be joined with newlines."""
+        raw = json.dumps({
+            "payloads": [
+                {"text": "Line one", "mediaUrl": None},
+                {"text": "Line two", "mediaUrl": None},
+            ],
+            "meta": {},
+        })
+        assert parse_response(raw) == "Line one\nLine two"
+
+    def test_log_lines_before_json(self):
+        """Log lines before the JSON blob should be skipped."""
+        payload = json.dumps({
+            "payloads": [{"text": "response text", "mediaUrl": None}],
+            "meta": {},
+        })
+        raw = "[INFO] Starting agent...\n[DEBUG] Loading tools...\n" + payload
+        assert parse_response(raw) == "response text"
+
+    def test_log_lines_mixed_with_json(self):
+        """Log output interleaved with JSON should still parse correctly."""
+        payload = json.dumps({
+            "payloads": [{"text": "the answer", "mediaUrl": None}],
+            "meta": {},
+        })
+        raw = (
+            "[Worker] Running OpenClaw turn...\n"
+            "[INFO] session started\n"
+            + payload + "\n"
+            "[INFO] session ended\n"
+        )
+        assert parse_response(raw) == "the answer"
+
+    def test_multiple_json_objects_takes_last(self):
+        """When multiple JSON objects with payloads exist, take the last one."""
+        first = json.dumps({
+            "payloads": [{"text": "wrong answer", "mediaUrl": None}],
+            "meta": {"turn": 1},
+        })
+        second = json.dumps({
+            "payloads": [{"text": "correct answer", "mediaUrl": None}],
+            "meta": {"turn": 2},
+        })
+        raw = "[LOG] starting\n" + first + "\n[LOG] more stuff\n" + second + "\n"
+        assert parse_response(raw) == "correct answer"
+
+    def test_non_payloads_json_before_payloads_json(self):
+        """A non-payloads JSON object before the real one should be skipped."""
+        noise = json.dumps({"status": "ok", "turn": 1})
+        real = json.dumps({
+            "payloads": [{"text": "actual response", "mediaUrl": None}],
+            "meta": {},
+        })
+        raw = noise + "\n" + real
+        assert parse_response(raw) == "actual response"
+
+    def test_empty_string(self):
+        """Empty input should return empty string."""
+        assert parse_response("") == ""
+
+    def test_none_input(self):
+        """None input should return empty string."""
+        assert parse_response(None) == ""
+
+    def test_whitespace_only(self):
+        """Whitespace-only input should return empty string."""
+        assert parse_response("   \n  \n  ") == ""
+
+    def test_pure_garbage(self):
+        """Non-JSON garbage should return empty string without crashing."""
+        assert parse_response("this is not json at all") == ""
+
+    def test_invalid_json(self):
+        """Malformed JSON should return empty string without crashing."""
+        assert parse_response('{"payloads": [{"text": "unclosed') == ""
+
+    def test_json_missing_payloads_key(self):
+        """Valid JSON without payloads key should return empty string."""
+        raw = json.dumps({"meta": {"turn": 1}, "other": "stuff"})
+        assert parse_response(raw) == ""
+
+    def test_payloads_not_a_list(self):
+        """payloads that is not a list should return empty string."""
+        raw = json.dumps({"payloads": "not a list"})
+        assert parse_response(raw) == ""
+
+    def test_empty_payloads_list(self):
+        """Empty payloads list should return empty string."""
+        raw = json.dumps({"payloads": [], "meta": {}})
+        assert parse_response(raw) == ""
+
+    def test_payloads_with_null_text(self):
+        """Payload entries with null text should be skipped."""
+        raw = json.dumps({
+            "payloads": [
+                {"text": None, "mediaUrl": "http://example.com/img.png"},
+                {"text": "visible text", "mediaUrl": None},
+            ],
+            "meta": {},
+        })
+        assert parse_response(raw) == "visible text"
+
+    def test_json_with_nested_braces_in_text(self):
+        """Response text containing JSON-like braces should parse correctly."""
+        raw = json.dumps({
+            "payloads": [{"text": 'Use {"key": "value"} in your config', "mediaUrl": None}],
+            "meta": {},
+        })
+        assert parse_response(raw) == 'Use {"key": "value"} in your config'
+
+    def test_stderr_error_lines_before_json(self):
+        """OpenClaw stderr error lines mixed in should not break parsing."""
+        payload = json.dumps({
+            "payloads": [{"text": "still works", "mediaUrl": None}],
+            "meta": {},
+        })
+        raw = (
+            "Error: something non-fatal happened\n"
+            "Warning: tool X not available\n"
+            + payload
+        )
+        assert parse_response(raw) == "still works"
+
+    def test_alternate_key_order(self):
+        """JSON where meta comes before payloads should still work."""
+        # Build JSON with meta first
+        raw = '{"meta": {"turn": 1}, "payloads": [{"text": "found it", "mediaUrl": null}]}'
+        assert parse_response(raw) == "found it"
 
 
 # =========================================================================
@@ -110,18 +259,22 @@ class TestWebhookServer:
         """wait_for_completion should return False if no signal arrives."""
         ws = WebhookServer("127.0.0.1", free_port)
         ws.start()
+        ws.register("test-container")
         try:
-            result = ws.wait_for_completion(timeout=0.1)
+            result = ws.wait_for_completion(container_id="test-container", timeout=0.1)
             assert result is False
         finally:
             ws.stop()
 
     def test_wait_for_completion_returns_true_on_signal(self, server, free_port):
         """wait_for_completion should return True when task-complete is POSTed."""
+        cid = "test-container-abc123"
+        server.register(cid)
+
         def send_signal():
             # Small delay to ensure wait_for_completion is blocking first
             time.sleep(0.05)
-            payload = json.dumps({"status": "done"}).encode()
+            payload = json.dumps({"status": "done", "container_id": cid}).encode()
             req = urllib.request.Request(
                 f"http://127.0.0.1:{free_port}/hooks/task-complete",
                 data=payload,
@@ -131,14 +284,16 @@ class TestWebhookServer:
 
         t = threading.Thread(target=send_signal)
         t.start()
-        result = server.wait_for_completion(timeout=5)
+        result = server.wait_for_completion(container_id=cid, timeout=5)
         t.join(timeout=2)
 
         assert result is True
 
     def test_task_complete_stores_payload(self, server, free_port):
         """POST to /hooks/task-complete should store the payload."""
-        payload = json.dumps({"task_id": "abc123"}).encode()
+        cid = "container-abc123"
+        server.register(cid)
+        payload = json.dumps({"task_id": "abc123", "container_id": cid}).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{free_port}/hooks/task-complete",
             data=payload,
@@ -149,7 +304,7 @@ class TestWebhookServer:
 
         body = json.loads(resp.read())
         assert body["status"] == "accepted"
-        assert server.last_payload == {"task_id": "abc123"}
+        assert server.last_payload(cid) == {"task_id": "abc123", "container_id": cid}
 
     def test_after_turn_returns_200(self, server, free_port):
         """POST to /hooks/after-turn should return 200 acknowledged."""
