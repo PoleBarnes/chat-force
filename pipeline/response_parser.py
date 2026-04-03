@@ -35,7 +35,7 @@ def parse_response(raw: str) -> str:
         log.warning("Failed to parse OpenClaw JSON: %s", exc)
         return ""
 
-    payloads = data.get("payloads")
+    payloads = data.get("payloads") or data.get("result", {}).get("payloads")
     if not isinstance(payloads, list):
         log.warning("OpenClaw JSON missing 'payloads' list")
         return ""
@@ -57,6 +57,11 @@ def _extract_json(raw: str) -> str | None:
     before the actual response.  We search for every ``{"payloads"`` occurrence,
     extract each balanced JSON object, and return the last valid one.  This
     handles mixed log output and multiple JSON objects reliably.
+
+    When ``payloads`` is nested under a ``result`` key (the newer OpenClaw
+    envelope format), the regex still matches the inner ``{"payloads"`` inside
+    the ``result`` value.  The full-blob fallback and per-line fallback also
+    check for ``result.payloads``.
     """
     # Collect all candidate positions where '{"payloads"' appears
     matches = list(re.finditer(r'\{"payloads"', raw))
@@ -87,6 +92,8 @@ def _extract_json(raw: str) -> str | None:
             try:
                 data = json.loads(line)
                 if "payloads" in data:
+                    return line
+                if isinstance(data.get("result"), dict) and "payloads" in data["result"]:
                     return line
             except json.JSONDecodeError:
                 continue

@@ -38,8 +38,12 @@ def _generate_run_id() -> str:
     return f"{ts}-{secrets.token_hex(4)}"
 
 
-def _git_short_hash() -> str:
-    """Return the short hash of HEAD on the current branch."""
+def _git_short_hash(run_id: str = "") -> str:
+    """Return the short hash of HEAD on the current branch.
+
+    If git fails or returns an empty string, falls back to the first 7
+    characters of *run_id* so we always return a meaningful identifier.
+    """
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -48,10 +52,14 @@ def _git_short_hash() -> str:
             timeout=10,
             check=True,
         )
-        return result.stdout.strip()
+        sha = result.stdout.strip()
+        if sha:
+            return sha
     except Exception:
         log.warning("Could not determine git short hash", exc_info=True)
-        return "unknown"
+
+    # Fallback: first 7 chars of the run_id (or a static token if run_id is empty).
+    return run_id[:7] if run_id else "0000000"
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +213,7 @@ class SessionManager:
         # users.  If it fails we remove the reservation.
         try:
             run_id = session.run_id
-            sandbox_version = _git_short_hash()
+            sandbox_version = _git_short_hash(run_id)
 
             # Start the shared webhook server if this is the first session.
             if not self._webhook_started:

@@ -271,7 +271,7 @@ def _handle_user_message(
         _update_status(client, channel_id, status_ts, f":x: Could not start a session: {exc}")
         return
 
-    version = session.sandbox_version or "latest"
+    version = session.sandbox_version
     _update_status(
         client, channel_id, status_ts,
         f":package: *New session* — sandbox `main@{version}` — _Leo is working..._"

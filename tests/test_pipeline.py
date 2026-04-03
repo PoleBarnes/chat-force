@@ -179,6 +179,62 @@ class TestParseResponse:
         raw = '{"meta": {"turn": 1}, "payloads": [{"text": "found it", "mediaUrl": null}]}'
         assert parse_response(raw) == "found it"
 
+    def test_nested_result_payloads(self):
+        """Payloads nested under a 'result' key should be found."""
+        raw = json.dumps({
+            "runId": "abc-123",
+            "status": "ok",
+            "summary": "completed",
+            "result": {
+                "payloads": [
+                    {"text": "response text here", "mediaUrl": None},
+                ],
+                "meta": {"turn": 1},
+            },
+        })
+        assert parse_response(raw) == "response text here"
+
+    def test_nested_result_multiple_payloads(self):
+        """Multiple payloads under 'result' should be joined."""
+        raw = json.dumps({
+            "runId": "abc-456",
+            "status": "ok",
+            "result": {
+                "payloads": [
+                    {"text": "first line", "mediaUrl": None},
+                    {"text": "second line", "mediaUrl": None},
+                ],
+                "meta": {},
+            },
+        })
+        assert parse_response(raw) == "first line\nsecond line"
+
+    def test_nested_result_with_log_lines(self):
+        """Nested result format with log lines before JSON should parse."""
+        payload = json.dumps({
+            "runId": "run-789",
+            "status": "ok",
+            "result": {
+                "payloads": [{"text": "nested response", "mediaUrl": None}],
+                "meta": {},
+            },
+        })
+        raw = "[INFO] Starting agent...\n[DEBUG] Loading...\n" + payload
+        assert parse_response(raw) == "nested response"
+
+    def test_nested_result_without_top_level_payloads(self):
+        """Envelope with only result.payloads (no top-level payloads) should work."""
+        raw = json.dumps({
+            "runId": "run-001",
+            "status": "ok",
+            "summary": "completed",
+            "result": {
+                "payloads": [{"text": "only nested", "mediaUrl": None}],
+                "meta": {},
+            },
+        })
+        assert parse_response(raw) == "only nested"
+
 
 # =========================================================================
 # PipelineConfig tests
