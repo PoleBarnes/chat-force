@@ -3,9 +3,16 @@
 
 FROM ghcr.io/openclaw/openclaw:latest
 
-# git is already in the base image; workspace dir may not exist yet
 USER root
-RUN mkdir -p /home/node/.openclaw/workspace && chown node:node /home/node/.openclaw/workspace
+
+# Create workspace and output directories
+RUN mkdir -p /home/node/.openclaw/workspace /output && \
+    chown -R node:node /home/node/.openclaw /output
+
+# Copy entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 USER node
 
 # Copy Mechanic workspace config
@@ -21,4 +28,4 @@ COPY --chown=node:node config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
 #   TASK_DESCRIPTION — what the Worker was asked to do
 #   ANTHROPIC_AUTH_TOKEN — LLM access
 
-ENTRYPOINT ["openclaw", "agent", "--agent", "main"]
+ENTRYPOINT ["/entrypoint.sh"]
