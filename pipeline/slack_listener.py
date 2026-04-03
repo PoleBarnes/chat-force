@@ -538,9 +538,11 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         if event.get("bot_id") or event.get("subtype") or not user_id:
             return
 
-        # Only process DMs — channel messages require an @mention, which
-        # is handled by the app_mention event handler.
-        if event.get("channel_type") != "im":
+        # Process DMs and thread replies (where user is continuing a conversation
+        # Leo started). Channel root messages require @mention (app_mention handler).
+        is_dm = event.get("channel_type") == "im"
+        is_thread_reply = event.get("thread_ts") is not None and event.get("thread_ts") != event.get("ts")
+        if not is_dm and not is_thread_reply:
             return
 
         if not text.strip():
