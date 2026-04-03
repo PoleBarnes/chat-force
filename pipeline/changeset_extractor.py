@@ -81,6 +81,7 @@ class ChangesetExtractor:
         bundle["docker_changes"] = self._extract_docker_changes(container)
         bundle["telemetry"] = self._extract_telemetry(container)
         bundle["openclaw_logs"] = self._extract_openclaw_logs(container, container_id)
+        bundle["output_files"] = self._extract_output_files(container, container_id)
         bundle["bundle_path"] = self.run_dir
 
         self._save_bundle(bundle)
@@ -256,6 +257,46 @@ class ChangesetExtractor:
             result["output_path"] = output_path
 
         return result
+
+    # -- Layer 5: Output files (binaries, rendered artifacts) -----------------
+
+    # File extensions that indicate rendered output worth preserving.
+    _OUTPUT_EXTENSIONS = {
+        ".mp4", ".webm", ".mov", ".avi",  # video
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",  # images
+        ".pdf",  # documents
+        ".zip", ".tar.gz",  # archives
+    }
+
+    def _extract_output_files(self, container, container_id: str) -> dict:
+        """Copy binary/rendered output files from the container.
+
+        Scans docker diff for files with known output extensions and copies
+        them to the run directory so they survive container cleanup.
+        """
+        output_dir = os.path.join(self.run_dir, "output-files")
+        copied = []
+
+        try:
+            diff = container.diff() or []
+            for entry in diff:
+                path = entry.get("Path", "")
+                # Only copy added/changed files (not deleted), skip noise
+                if entry.get("Kind", 0) not in (0, 1):  # 0=changed, 1=added
+                    continue
+                if _is_noise(path):
+                    continue
+                # Check if it's an output file worth preserving
+                lower = path.lower()
+                if any(lower.endswith(ext) for ext in self._OUTPUT_EXTENSIONS):
+                    dest = os.path.join(output_dir, os.path.basename(path))
+                    if self._docker_cp(container_id, path, dest):
+                        copied.append({"container_path": path, "local_path": dest})
+                        log.info("Captured output file: %s -> %s", path, dest)
+        except Exception:
+            log.warning("Failed to extract output files", exc_info=True)
+
+        return {"output_dir": output_dir if copied else None, "files": copied}
 
     # -- helpers --------------------------------------------------------------
 

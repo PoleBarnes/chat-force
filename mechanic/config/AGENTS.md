@@ -15,7 +15,7 @@ You work alone. You are the sole evaluator of this changeset.
 
 ## Output Format
 
-You MUST write your verdict as JSON to /output/verdict.json. Use this exact schema:
+You MUST output your verdict as a JSON code block in your response. Do NOT try to write files. Use this exact schema:
 
     {
       "verdict": "approve" or "reject",
