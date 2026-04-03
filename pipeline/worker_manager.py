@@ -19,19 +19,27 @@ log = logging.getLogger(__name__)
 class WorkerManager:
     """Starts, monitors, and cleans up the Worker container."""
 
-    def __init__(self, config: PipelineConfig, run_id: str):
+    def __init__(self, config: PipelineConfig, run_id: str, webhook: WebhookServer | None = None):
         self.config = config
         self.run_id = run_id
         self._client = docker.from_env()
         self._container = None
-        self._webhook = WebhookServer(config.webhook_host, config.webhook_port)
+        self._webhook = webhook or WebhookServer(config.webhook_host, config.webhook_port)
+        self._owns_webhook = webhook is None  # only start/stop if we created it
 
     # -- public API -----------------------------------------------------------
 
     def start(self, task: str) -> str:
         """Launch the Worker container. Returns the container ID."""
         self._ensure_image()
-        self._webhook.start()
+
+        # Start webhook server if we own it (CLI mode). In session mode,
+        # the session manager owns the shared webhook server.
+        if self._owns_webhook:
+            self._webhook.start()
+
+        # Reset completion event before each new container
+        self._webhook.reset()
 
         webhook_base = f"http://host.docker.internal:{self.config.webhook_port}"
 
@@ -164,8 +172,9 @@ class WorkerManager:
         return self._container.logs().decode(errors="replace")
 
     def cleanup(self) -> None:
-        """Remove the worker container and stop the webhook server."""
-        self._webhook.stop()
+        """Remove the worker container (and webhook server if we own it)."""
+        if self._owns_webhook:
+            self._webhook.stop()
         if self._container is None:
             return
         try:
