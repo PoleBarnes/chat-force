@@ -8,6 +8,7 @@ OPENCLAW_DIR="/home/node/.openclaw"
 WORKSPACE="/workspace/config"
 GATEWAY_PORT=18789
 SESSION_ID="worker-session-$$"
+NEXT_MESSAGE_FILE="/tmp/next-message.txt"
 
 echo "[Worker] Configuring OpenClaw..."
 
@@ -86,24 +87,32 @@ done
 # ── 5. Auto-approve all exec ──
 openclaw approvals allowlist add --agent "*" "**" 2>/dev/null || true
 
-# ── 6. Run the initial task ──
-echo "[Worker] Starting task: ${TASK_INSTRUCTION}"
-openclaw agent \
-  --agent main \
-  --session-id "$SESSION_ID" \
-  --message "${TASK_INSTRUCTION}" \
-  --timeout "${AGENT_TIMEOUT:-1800}" \
-  --json \
-  > /tmp/openclaw-output.json 2>&1 || true
+# ── Helper: run a single OpenClaw turn and capture output ──
+run_openclaw_turn() {
+  local message="$1"
+  local output_file
+  output_file=$(mktemp /tmp/openclaw-turn-XXXXXX.json)
 
-# Post-task cleanup: remove nested .git dirs from scaffolding tools
-find "$WORKSPACE" -mindepth 2 -name .git -type d -exec rm -rf {} + 2>/dev/null || true
+  echo "[Worker] Running OpenClaw turn..."
+  openclaw agent \
+    --agent main \
+    --session-id "$SESSION_ID" \
+    --message "$message" \
+    --timeout "${AGENT_TIMEOUT:-1800}" \
+    --json \
+    > "$output_file" 2>&1 || true
 
-echo "[Worker] Task complete"
+  # Write latest response (overwritten each turn)
+  cp "$output_file" /tmp/latest-response.json
 
-# ── 7. Signal completion and wait for possible feedback ──
-# The orchestrator may send feedback via FEEDBACK_FILE, or stop the container.
-FEEDBACK_FILE="/tmp/mechanic-feedback.txt"
+  # Append to full session log
+  cat "$output_file" >> /tmp/openclaw-output.json
+
+  rm -f "$output_file"
+
+  # Post-task cleanup: remove nested .git dirs from scaffolding tools
+  find "$WORKSPACE" -mindepth 2 -name .git -type d -exec rm -rf {} + 2>/dev/null || true
+}
 
 signal_completion() {
   if [ -n "${ORCHESTRATOR_WEBHOOK_URL:-}" ]; then
@@ -114,29 +123,24 @@ signal_completion() {
   fi
 }
 
+# ── 6. Run the initial task ──
+echo "[Worker] Starting task: ${TASK_INSTRUCTION}"
+run_openclaw_turn "$TASK_INSTRUCTION"
+echo "[Worker] Task complete"
 signal_completion
 
-# ── 8. Feedback loop: wait for feedback, iterate, signal again ──
-echo "[Worker] Waiting for feedback or shutdown..."
+# ── 7. Message loop: wait for follow-up messages or shutdown ──
+echo "[Worker] Waiting for messages or shutdown..."
 while true; do
-  # Check for feedback file (written by orchestrator via docker cp)
-  if [ -f "$FEEDBACK_FILE" ]; then
-    FEEDBACK=$(cat "$FEEDBACK_FILE")
-    rm -f "$FEEDBACK_FILE"
+  # Check for next message file (written by orchestrator via docker cp)
+  if [ -f "$NEXT_MESSAGE_FILE" ]; then
+    MSG=$(cat "$NEXT_MESSAGE_FILE")
+    rm -f "$NEXT_MESSAGE_FILE"
 
-    echo "[Worker] Received feedback, iterating..."
-    openclaw agent \
-      --agent main \
-      --session-id "$SESSION_ID" \
-      --message "$FEEDBACK" \
-      --timeout "${AGENT_TIMEOUT:-1800}" \
-      --json \
-      >> /tmp/openclaw-output.json 2>&1 || true
+    echo "[Worker] Received follow-up message, processing..."
+    run_openclaw_turn "$MSG"
 
-    # Post-task cleanup
-    find "$WORKSPACE" -mindepth 2 -name .git -type d -exec rm -rf {} + 2>/dev/null || true
-
-    echo "[Worker] Iteration complete"
+    echo "[Worker] Turn complete"
     signal_completion
   fi
 

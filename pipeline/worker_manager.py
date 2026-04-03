@@ -1,5 +1,6 @@
 """Docker container lifecycle management for the Worker (Leo/OpenClaw)."""
 
+import json
 import logging
 import os
 import subprocess
@@ -9,6 +10,7 @@ import docker
 from docker.errors import ImageNotFound, NotFound
 
 from pipeline.config import PipelineConfig
+from pipeline.response_parser import parse_response
 from pipeline.webhook_server import WebhookServer
 
 log = logging.getLogger(__name__)
@@ -77,10 +79,10 @@ class WorkerManager:
             f"Worker did not complete within {timeout}s (container status: {status})"
         )
 
-    def send_feedback(self, feedback: str) -> None:
-        """Send Mechanic feedback to the Worker for another iteration.
+    def send_message(self, message: str) -> None:
+        """Send a follow-up message to the Worker for another turn.
 
-        Writes the feedback to a file inside the container. The Worker
+        Writes the message to a file inside the container. The Worker
         entrypoint polls for this file and sends it to the same OpenClaw
         session, preserving full context.
         """
@@ -90,27 +92,60 @@ class WorkerManager:
         self._container.reload()
         if self._container.status not in ("running",):
             raise RuntimeError(
-                f"Worker container is {self._container.status}, cannot send feedback"
+                f"Worker container is {self._container.status}, cannot send message"
             )
 
-        # Write feedback to a temp file, then docker cp into the container
+        # Write message to a temp file, then docker cp into the container
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write(feedback)
+            f.write(message)
             tmp_path = f.name
 
         try:
             subprocess.run(
-                ["docker", "cp", tmp_path, f"{self._container.id}:/tmp/mechanic-feedback.txt"],
+                ["docker", "cp", tmp_path, f"{self._container.id}:/tmp/next-message.txt"],
                 check=True,
                 capture_output=True,
                 timeout=10,
             )
-            log.info("Feedback sent to Worker (%d chars)", len(feedback))
+            log.info("Message sent to Worker (%d chars)", len(message))
         finally:
             os.unlink(tmp_path)
 
         # Reset the webhook completion event so we can wait again
         self._webhook.reset()
+
+    def send_feedback(self, feedback: str) -> None:
+        """Backward-compatible alias for send_message()."""
+        return self.send_message(feedback)
+
+    def get_response(self) -> str:
+        """Retrieve the Worker's latest response text.
+
+        Copies /tmp/latest-response.json from the container, parses the
+        OpenClaw JSON output, and returns the extracted text.
+        """
+        if self._container is None:
+            raise RuntimeError("Worker container not running")
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            subprocess.run(
+                ["docker", "cp", f"{self._container.id}:/tmp/latest-response.json", tmp_path],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+            with open(tmp_path, "r") as f:
+                raw_json = f.read()
+            return parse_response(raw_json)
+        except subprocess.CalledProcessError:
+            log.warning("Could not copy latest-response.json from Worker")
+            return ""
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
     def is_alive(self) -> bool:
         """Check if the Worker container is still running."""

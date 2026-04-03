@@ -1,0 +1,318 @@
+"""Slack socket-mode listener for Leo.
+
+Connects to Slack, routes messages to the session manager,
+and posts Leo's responses back to channels.
+
+Usage::
+
+    doppler run -p chat-force -c dev -- \\
+        uv run --python 3.13 --with docker,slack_sdk,slack_bolt \\
+        python -m pipeline.slack_listener
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+import signal
+import sys
+import traceback
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+from slack_bolt import App
+from slack_bolt.adapter.socket_mode import SocketModeHandler
+
+from pipeline.config import PipelineConfig
+from pipeline.session_manager import Session, SessionManager
+
+if TYPE_CHECKING:
+    from slack_sdk import WebClient
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Channel history helper
+# ---------------------------------------------------------------------------
+
+
+def _read_channel_history(client: WebClient, channel_id: str, limit: int = 20) -> str:
+    """Read recent messages from a Slack channel for session context.
+
+    Returns a formatted string of recent conversation, or an empty string
+    if nothing useful is available.
+    """
+    try:
+        result = client.conversations_history(channel=channel_id, limit=limit)
+    except Exception:
+        log.warning("Could not read channel history for %s", channel_id, exc_info=True)
+        return ""
+
+    messages = result.get("messages", [])
+    if not messages:
+        return ""
+
+    # Messages arrive newest-first; reverse to chronological order.
+    messages = list(reversed(messages))
+
+    lines: list[str] = []
+    for msg in messages:
+        # Skip bot status messages (our own session announcements, etc.)
+        if msg.get("bot_id") or msg.get("subtype"):
+            continue
+
+        user = msg.get("user", "unknown")
+        text = msg.get("text", "")
+        ts = msg.get("ts", "")
+
+        # Convert Slack epoch timestamp to human-readable form.
+        try:
+            dt = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+            formatted_ts = dt.strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError, OSError):
+            formatted_ts = ts
+
+        lines.append(f"[{formatted_ts}] {user}: {text}")
+
+    if not lines:
+        return ""
+
+    return "Recent conversation history (for context):\n" + "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Session-closed callback (Mechanic results -> Slack)
+# ---------------------------------------------------------------------------
+
+
+def _make_session_closed_callback(client: WebClient):
+    """Return a callback that posts Mechanic results back to Slack.
+
+    The returned function is meant to be called by the session manager's
+    idle-checker when a session is closed and the Mechanic phase completes.
+    """
+
+    def on_session_closed(session: Session, result: dict | None) -> None:
+        if result is None:
+            return
+
+        channel = session.channel_id
+        status = result.get("status")
+
+        try:
+            if status == "approved":
+                pr_url = result.get("pr_url", "")
+                client.chat_postMessage(
+                    channel=channel,
+                    text=f"\u2705 Changes approved \u2014 PR created: {pr_url}",
+                )
+
+            elif status == "linear_proposed":
+                proposal = result.get("linear_proposal", {})
+                reason = proposal.get("reason", "")
+                client.chat_postMessage(
+                    channel=channel,
+                    text=(
+                        f"\U0001f4a1 Findings worth tracking:\n{reason}\n\n"
+                        "React \u2705 to create a Linear issue, or \u274c to skip."
+                    ),
+                )
+
+            elif status == "rejected":
+                verdict = result.get("verdict") or {}
+                reason = verdict.get("reason", "Unknown")
+                client.chat_postMessage(
+                    channel=channel,
+                    text=f"\U0001f50d Session analyzed \u2014 no changes kept. {reason[:200]}",
+                )
+
+            elif status == "error":
+                error = result.get("error", "Unknown error")
+                client.chat_postMessage(
+                    channel=channel,
+                    text=f"\u26a0\ufe0f Session closed with error: {error[:300]}",
+                )
+
+            # "no_changes" -- say nothing
+
+        except Exception:
+            log.warning(
+                "Could not post session-close notification to %s",
+                channel,
+                exc_info=True,
+            )
+
+    return on_session_closed
+
+
+# ---------------------------------------------------------------------------
+# Core message routing
+# ---------------------------------------------------------------------------
+
+
+def _handle_user_message(
+    user_id: str,
+    channel_id: str,
+    text: str,
+    say,
+    client: WebClient,
+    session_manager: SessionManager,
+) -> None:
+    """Route an incoming user message through the session manager."""
+
+    # Check for an existing session first (fast path, no blocking).
+    existing = session_manager.get_session(user_id)
+
+    if existing is not None:
+        # Existing session -- send follow-up message.
+        try:
+            response = session_manager.send_message(existing, text)
+            say(response or "_Leo didn't produce a response._")
+        except TimeoutError:
+            say("\u23f3 Timed out waiting for Leo. Try again or start a new session.")
+        except RuntimeError as exc:
+            log.error("send_message failed for user %s: %s", user_id, exc)
+            say(f"\u26a0\ufe0f Could not deliver message: {exc}")
+        return
+
+    # New session -- enrich with channel history, then create.
+    history_context = _read_channel_history(client, channel_id, limit=20)
+    if history_context:
+        enriched_message = f"{history_context}\n\n---\n\nUser's request:\n{text}"
+    else:
+        enriched_message = text
+
+    say("\U0001f4e6 Starting a new session\u2026")
+
+    try:
+        session, is_new = session_manager.get_or_create_session(
+            user_id, channel_id, enriched_message
+        )
+    except Exception as exc:
+        log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
+        say(f"\u274c Could not start a session: {exc}")
+        return
+
+    version = session.sandbox_version or "latest"
+    say(f"\U0001f4e6 Session ready \u2014 sandbox `main@{version}`")
+
+    # Retrieve the first-turn response.
+    try:
+        response = session.worker.get_response()
+        say(response or "_Leo didn't produce a response._")
+    except Exception as exc:
+        log.error("Could not get first-turn response: %s", exc, exc_info=True)
+        say(f"\u26a0\ufe0f Session started but could not read the initial response: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# App factory
+# ---------------------------------------------------------------------------
+
+
+def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
+    """Create and configure the Slack Bolt app and session manager."""
+
+    app = App(token=os.environ["SLACK_BOT_TOKEN"])
+    session_manager = SessionManager(config)
+
+    # Wire up the session-close callback so Mechanic results reach Slack.
+    session_manager.on_session_closed = _make_session_closed_callback(app.client)
+
+    # -- event: direct message or channel message ----------------------------
+
+    @app.event("message")
+    def handle_message(event, say, client):
+        user_id = event.get("user")
+        channel_id = event.get("channel")
+        text = event.get("text", "")
+
+        # Skip bot messages to prevent infinite loops.
+        if event.get("bot_id") or event.get("subtype") or not user_id:
+            return
+
+        if not text.strip():
+            return
+
+        try:
+            _handle_user_message(user_id, channel_id, text, say, client, session_manager)
+        except Exception:
+            log.error("Unhandled error in message handler:\n%s", traceback.format_exc())
+            try:
+                say("\u274c Something went wrong. Check the logs for details.")
+            except Exception:
+                pass
+
+    # -- event: @Leo mention in a channel ------------------------------------
+
+    @app.event("app_mention")
+    def handle_mention(event, say, client):
+        user_id = event.get("user")
+        channel_id = event.get("channel")
+        raw_text = event.get("text", "")
+
+        if not user_id:
+            return
+
+        # Strip the @mention prefix (e.g. "<@U1234ABC> do something")
+        text = re.sub(r"<@[A-Z0-9]+>\s*", "", raw_text).strip()
+        if not text:
+            say("Hey! Send me a message and I'll get to work.")
+            return
+
+        try:
+            _handle_user_message(user_id, channel_id, text, say, client, session_manager)
+        except Exception:
+            log.error("Unhandled error in mention handler:\n%s", traceback.format_exc())
+            try:
+                say("\u274c Something went wrong. Check the logs for details.")
+            except Exception:
+                pass
+
+    return app, session_manager
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """Start the Slack listener (blocks forever)."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    # Validate required env vars early.
+    for var in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"):
+        if not os.environ.get(var):
+            log.critical("Missing required environment variable: %s", var)
+            sys.exit(1)
+
+    config = PipelineConfig()
+    app, session_manager = create_app(config)
+
+    # -- graceful shutdown ---------------------------------------------------
+
+    def shutdown(signum, _frame):
+        sig_name = signal.Signals(signum).name
+        log.info("Received %s -- shutting down", sig_name)
+        session_manager.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    # -- start ---------------------------------------------------------------
+
+    session_manager.start()
+    log.info("Slack listener starting in socket mode")
+
+    handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
+    handler.start()  # blocks
+
+
+if __name__ == "__main__":
+    main()

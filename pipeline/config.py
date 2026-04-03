@@ -27,6 +27,9 @@ class PipelineConfig:
     webhook_host: str = "0.0.0.0"
     webhook_port: int = 8787
 
+    # Session
+    session_idle_timeout: int = 600  # 10 minutes
+
     # Secrets (from Doppler -- never hardcode values here)
     github_token_env: str = "GITHUB_TOKEN"
     anthropic_token_env: str = "ANTHROPIC_AUTH_TOKEN"
