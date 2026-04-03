@@ -94,6 +94,7 @@ echo "[Worker] Starting task: ${TASK_INSTRUCTION}"
 openclaw agent \
   --agent main \
   --message "${TASK_INSTRUCTION}" \
+  --timeout "${AGENT_TIMEOUT:-1800}" \
   --json \
   > /tmp/openclaw-output.json 2>&1 || true
 
