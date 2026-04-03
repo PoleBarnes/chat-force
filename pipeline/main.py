@@ -33,8 +33,12 @@ def _generate_run_id() -> str:
     return f"{ts}-{suffix}"
 
 
-def run_pipeline(task: str, config: PipelineConfig) -> dict:
-    """Execute the full self-improving loop. Returns a run summary dict."""
+def run_pipeline(task: str, config: PipelineConfig, reply_channel: str | None = None) -> dict:
+    """Execute the full self-improving loop. Returns a run summary dict.
+
+    *reply_channel* is the Slack channel to notify (e.g. from the triggering
+    message).  When ``None`` (CLI mode), Slack notifications are skipped.
+    """
     run_id = _generate_run_id()
     run_dir = os.path.join(config.output_base, run_id)
     os.makedirs(run_dir, exist_ok=True)
@@ -81,7 +85,7 @@ def run_pipeline(task: str, config: PipelineConfig) -> dict:
             summary["pr_url"] = pr_url
             summary["status"] = "approved"
 
-            slack = SlackHandler(config)
+            slack = SlackHandler(config, reply_channel)
             slack.notify_approved(run_id, task, pr_url)
 
             # Clean up both containers on success
@@ -92,7 +96,7 @@ def run_pipeline(task: str, config: PipelineConfig) -> dict:
             log.info("[%s] Verdict: REJECTED -- %s", run_id, reason)
             summary["status"] = "rejected"
 
-            slack = SlackHandler(config)
+            slack = SlackHandler(config, reply_channel)
             slack.notify_rejected(run_id, task, reason)
 
             # Clean up on rejection

@@ -120,7 +120,8 @@ class MechanicManager:
         except ImageNotFound:
             log.info("Mechanic image not found, building %s ...", self.config.mechanic_image)
             self._client.images.build(
-                path="mechanic",
+                path=".",
+                dockerfile="mechanic/Dockerfile",
                 tag=self.config.mechanic_image,
                 rm=True,
             )

@@ -511,10 +511,16 @@ class TestSlackHandler:
             handler.notify_rejected("run-001", "test task", "bad code")
 
     @patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-fake-token"})
-    def test_client_created_with_token(self, config):
-        """SlackHandler should create a WebClient when token is available."""
-        handler = SlackHandler(config)
+    def test_client_created_with_token_and_channel(self, config):
+        """SlackHandler should create a WebClient when token and channel are provided."""
+        handler = SlackHandler(config, reply_channel="#test-channel")
         assert handler._client is not None
+
+    def test_no_client_without_channel(self, config):
+        """SlackHandler should skip client creation when no reply_channel."""
+        with patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-fake-token"}):
+            handler = SlackHandler(config)
+            assert handler._client is None
 
 
 # =========================================================================

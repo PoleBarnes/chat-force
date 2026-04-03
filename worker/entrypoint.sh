@@ -10,10 +10,17 @@ export ANTHROPIC_API_KEY="${ANTHROPIC_AUTH_TOKEN}"
 
 echo "[Worker] Starting OpenClaw with task: ${TASK_INSTRUCTION}"
 
-# Initialize git in the config directory so we can diff later
+# Initialize git baseline.
+# The Dockerfile COPYs the repo and workspace files into /workspace/config.
+# We commit that state plus gitignore rules for OpenClaw runtime artifacts
+# so only real agent output shows up in the changeset diff.
 cd /workspace/config
+git config user.name "Worker"
+git config user.email "worker@chat-force.local"
+echo ".openclaw/" >> .gitignore
+echo "HEARTBEAT.md" >> .gitignore
 git add -A
-git commit -m "baseline" --allow-empty 2>/dev/null || true
+git commit -m "baseline" --allow-empty
 
 # Run the task via OpenClaw CLI (--local mode, no Gateway needed)
 openclaw agent \

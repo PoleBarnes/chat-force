@@ -1,0 +1,19 @@
+# Keep the build context clean and avoid leaking secrets/state
+# NOTE: .git is NOT excluded — we need it inside the Worker container
+# for changeset extraction (git diff). The .dockerignore in .git/ dirs
+# is handled by git clone --depth 1 in the original approach; here we
+# accept the full .git since we COPY the local repo.
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+secrets/
+__pycache__
+*.pyc
+.pytest_cache
+node_modules
+.DS_Store
+.vscode
+.idea
+audit/logs/

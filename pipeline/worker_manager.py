@@ -119,7 +119,8 @@ class WorkerManager:
         except ImageNotFound:
             log.info("Worker image not found, building %s ...", self.config.worker_image)
             self._client.images.build(
-                path="worker",
+                path=".",
+                dockerfile="worker/Dockerfile",
                 tag=self.config.worker_image,
                 rm=True,
             )
