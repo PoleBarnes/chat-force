@@ -223,6 +223,18 @@ def _set_thread_status(
             log.debug("assistant_threads_setStatus failed", exc_info=True)
 
 
+_cached_team_id: str | None = None
+
+
+def _get_team_id(client: WebClient) -> str:
+    """Get the workspace team ID (cached after first call)."""
+    global _cached_team_id
+    if _cached_team_id is None:
+        resp = client.auth_test()
+        _cached_team_id = resp.get("team_id", "")
+    return _cached_team_id
+
+
 def _stream_response(
     client: WebClient, channel: str, text: str, *, thread_ts: str | None = None,
 ) -> None:
@@ -235,9 +247,11 @@ def _stream_response(
         return
 
     try:
+        team_id = _get_team_id(client)
         stream_result = client.chat_startStream(
             channel=channel,
             thread_ts=thread_ts,
+            recipient_team_id=team_id,
         )
         stream_channel = stream_result["channel"]
         stream_ts = stream_result["ts"]
