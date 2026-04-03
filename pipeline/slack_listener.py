@@ -147,6 +147,33 @@ def _make_session_closed_callback(client: WebClient):
 
 
 # ---------------------------------------------------------------------------
+# Live status helpers
+# ---------------------------------------------------------------------------
+
+
+def _set_presence(client: WebClient, presence: str) -> None:
+    """Set bot presence to 'auto' (online/idle) or 'away'."""
+    try:
+        client.users_setPresence(presence=presence)
+    except Exception:
+        log.debug("Could not set presence to %s", presence, exc_info=True)
+
+
+def _post_status(client: WebClient, channel: str, text: str) -> str:
+    """Post a new status message. Returns its ts for later updates."""
+    resp = client.chat_postMessage(channel=channel, text=text)
+    return resp["ts"]
+
+
+def _update_status(client: WebClient, channel: str, ts: str, text: str) -> None:
+    """Update an existing message in-place (live progress effect)."""
+    try:
+        client.chat_update(channel=channel, ts=ts, text=text)
+    except Exception:
+        log.debug("Could not update status message", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Core message routing
 # ---------------------------------------------------------------------------
 
@@ -164,46 +191,69 @@ def _handle_user_message(
     # Check for an existing session first (fast path, no blocking).
     existing = session_manager.get_session(user_id)
 
+    _set_presence(client, "auto")  # mark active
+
     if existing is not None:
-        # Existing session -- send follow-up message.
+        # Existing session -- post a thinking indicator, then update with response.
+        status_ts = _post_status(client, channel_id, ":hourglass_flowing_sand: _Leo is thinking..._")
         try:
             response = session_manager.send_message(existing, text)
-            say(response or "_Leo didn't produce a response._")
+            _update_status(client, channel_id, status_ts, response or "_Leo didn't produce a response._")
         except TimeoutError:
-            say("\u23f3 Timed out waiting for Leo. Try again or start a new session.")
+            _update_status(client, channel_id, status_ts, ":hourglass: Timed out waiting for Leo. Try again or start a new session.")
         except RuntimeError as exc:
             log.error("send_message failed for user %s: %s", user_id, exc)
-            say(f"\u26a0\ufe0f Could not deliver message: {exc}")
+            _update_status(client, channel_id, status_ts, f":warning: Could not deliver message: {exc}")
         return
 
-    # New session -- enrich with channel history, then create.
+    # ── New session ──
+    # Post a single status message and update it as we progress.
+    status_ts = _post_status(
+        client, channel_id,
+        ":package: *New session* — reading channel history..."
+    )
+
+    # Read channel history for context.
     history_context = _read_channel_history(client, channel_id, limit=20)
     if history_context:
         enriched_message = f"{history_context}\n\n---\n\nUser's request:\n{text}"
     else:
         enriched_message = text
 
-    say("\U0001f4e6 Starting a new session\u2026")
+    _update_status(
+        client, channel_id, status_ts,
+        ":package: *New session* — spinning up sandbox..."
+    )
 
     try:
-        session, is_new = session_manager.get_or_create_session(
+        session, _is_new = session_manager.get_or_create_session(
             user_id, channel_id, enriched_message
         )
     except Exception as exc:
         log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
-        say(f"\u274c Could not start a session: {exc}")
+        _update_status(client, channel_id, status_ts, f":x: Could not start a session: {exc}")
         return
 
     version = session.sandbox_version or "latest"
-    say(f"\U0001f4e6 Session ready \u2014 sandbox `main@{version}`")
+    _update_status(
+        client, channel_id, status_ts,
+        f":package: *New session* — sandbox `main@{version}` — _Leo is working..._"
+    )
 
-    # Retrieve the first-turn response.
+    # Retrieve the first-turn response and replace the status message.
     try:
         response = session.worker.get_response()
-        say(response or "_Leo didn't produce a response._")
+        _update_status(
+            client, channel_id, status_ts,
+            f":package: `main@{version}`\n\n{response}" if response
+            else "_Leo didn't produce a response._"
+        )
     except Exception as exc:
         log.error("Could not get first-turn response: %s", exc, exc_info=True)
-        say(f"\u26a0\ufe0f Session started but could not read the initial response: {exc}")
+        _update_status(
+            client, channel_id, status_ts,
+            f":warning: Session started (`main@{version}`) but could not read the response: {exc}"
+        )
 
 
 # ---------------------------------------------------------------------------
