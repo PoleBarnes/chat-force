@@ -196,11 +196,40 @@ class MechanicManager:
             path = f.get("container_path", f.get("local_path", ""))
             output_summary.append(path)
 
+        # ── Git changes: strip binary/large files from file_contents ──
+        # The Mechanic reviews source code, not binary blobs or lock files.
+        BINARY_EXTENSIONS = {
+            ".mp4", ".webm", ".mov", ".avi", ".mp3", ".wav", ".ogg", ".flac",
+            ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+            ".pdf", ".zip", ".tar", ".gz", ".woff", ".woff2", ".ttf", ".eot",
+        }
+        SKIP_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml"}
+        MAX_FILE_SIZE = 50_000  # 50K chars — skip anything bigger
+
+        filtered_contents = {}
+        skipped_files = []
+        for path, content in git.get("file_contents", {}).items():
+            basename = path.rsplit("/", 1)[-1] if "/" in path else path
+            ext = ("." + basename.rsplit(".", 1)[-1]).lower() if "." in basename else ""
+            if basename in SKIP_FILES:
+                skipped_files.append(f"{path} (lock file, {len(content):,} chars)")
+            elif ext in BINARY_EXTENSIONS:
+                skipped_files.append(f"{path} (binary, {len(content):,} chars)")
+            elif len(content) > MAX_FILE_SIZE:
+                skipped_files.append(f"{path} (too large, {len(content):,} chars)")
+            else:
+                filtered_contents[path] = content
+
+        git_for_review = dict(git)
+        git_for_review["file_contents"] = filtered_contents
+        if skipped_files:
+            git_for_review["skipped_files"] = skipped_files
+
         return {
             "run_id": changeset.get("run_id"),
             "task": changeset.get("task"),
             "timestamp": changeset.get("timestamp"),
-            "git_changes": git,  # full git changes — this IS the code review
+            "git_changes": git_for_review,
             "docker_changes_summary": docker_summary,
             "telemetry": telemetry_summary,
             "output_files": output_summary,
