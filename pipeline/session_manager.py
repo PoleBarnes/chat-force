@@ -72,6 +72,7 @@ class Session:
     message_count: int = 0
     sandbox_version: str = ""
     _first_message: str = field(default="", repr=False)
+    _ready: threading.Event = field(default_factory=threading.Event, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +163,19 @@ class SessionManager:
         with self._lock:
             existing = self._sessions.get(user_id)
             if existing is not None:
-                return existing, False
+                if existing.worker is not None:
+                    return existing, False
+                # Placeholder session still starting up — wait for it outside the lock.
+                pending = existing
+            else:
+                pending = None
+
+        # If another thread is already creating a session, wait for it.
+        if pending is not None:
+            pending._ready.wait(timeout=self._idle_timeout)
+            return pending, False
+
+        with self._lock:
 
             # Reserve the slot before releasing the lock so a concurrent call
             # for the same user_id doesn't start a second container.  We'll
@@ -204,6 +217,9 @@ class SessionManager:
                 session.sandbox_version = sandbox_version
                 session.message_count = 1
                 session.last_activity = datetime.now(timezone.utc)
+
+            # Signal that the session is ready for use.
+            session._ready.set()
 
             log.info(
                 "[%s] New session for user %s (container %s, sandbox %s)",
@@ -510,6 +526,14 @@ class SessionManager:
             return len(self._sessions)
 
     def get_session(self, user_id: str) -> Session | None:
-        """Return the active session for *user_id*, or None."""
+        """Return the active session for *user_id*, or None.
+
+        Only returns sessions where the Worker is fully initialized.
+        Placeholder sessions (still starting up) return None so the
+        caller doesn't try to use an uninitialized worker.
+        """
         with self._lock:
-            return self._sessions.get(user_id)
+            session = self._sessions.get(user_id)
+            if session is not None and session.worker is None:
+                return None  # still starting up
+            return session
