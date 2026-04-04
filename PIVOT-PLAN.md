@@ -50,7 +50,8 @@ Key principles:
 - New `worker/entrypoint.py` that calls `query()` with system prompt assembled from workspace files
 - **Agent SDK configuration in query() call:**
   - `permission_mode="bypassPermissions"` — container is already sandboxed by Docker
-  - `allowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "ComputerUse"]` — full tool access including subagents and computer use
+  - `allowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "NotebookEdit", "TodoWrite"]` — full tool access including subagents (NOTE: ComputerUse is NOT available in Agent SDK, only via raw Messages API)
+  - Use `ClaudeSDKClient` (not bare `query()`) for multi-turn, hooks, and MCP support
   - `max_budget_usd` — from config, prevents runaway costs
   - `max_turns` — from config, prevents infinite loops
 - **Hooks registered in entrypoint:**
@@ -172,20 +173,32 @@ Key principles:
 
 ## New Capabilities Unlocked
 
-- **Subagent spawning** — Leo can delegate to specialized sub-agents
-- **Worktree isolation** — Parallel work in git worktrees
-- **Computer use** — Screenshots, mouse, keyboard for GUI interaction
-- **Built-in memory** — Session-to-session knowledge persistence
-- **MCP servers** — Extensible tool ecosystem
-- **Structured output** — Enforced JSON schemas for verdicts
-- **Per-task cost tracking** — Real token/cost data per query()
-- **Permission controls** — Fine-grained tool access per task
-- **Python hooks (PreToolUse, PostToolUse, Stop, etc.)** — Real-time observability of every tool call. Hooks run in our Python process, not shell commands. The Mechanic gets a complete ordered log of what the agent did, not just the end-state diff. Key hooks:
+- **Subagent spawning with worktree isolation** — Leo can delegate to specialized sub-agents, each in their own git worktree. Orchestrator merges branches after completion. Different models per agent (Opus for complex, Sonnet for moderate, Haiku for simple). Subagents cannot spawn their own subagents — orchestrator controls all.
+- **MCP servers (11,000+ ecosystem)** — Extensible tool ecosystem. Must-haves: Playwright (browser), GitHub (official), Firecrawl (web scraping), Context7 (live docs), Brave Search, Memory (knowledge graph). Configured per-query. Security: inside Docker, MCP servers are contained by the sandbox.
+- **Structured output** — Enforced JSON schemas for verdicts via `output_format` parameter
+- **Per-task cost tracking** — `max_budget_usd` for hard cost caps, usage data on every AssistantMessage
+- **Permission controls** — 5 modes (default, plan, acceptEdits, dontAsk, bypassPermissions). `can_use_tool` callback for dynamic per-tool decisions. `allowed_tools` and `disallowed_tools` for static control.
+- **Python hooks** — Real-time observability of every tool call. Hooks run in our Python process:
   - `PostToolUse` — capture every tool call result for audit/Mechanic analysis
   - `PreToolUse` — audit logging, policy enforcement (block dangerous commands)
   - `Stop` — trigger changeset extraction when agent finishes
   - `SubagentStart/Stop` — track sub-agent activity
   - `PermissionRequest` — auto-approve/deny based on policy
+- **Session management** — `continue_conversation`, `resume`, `fork_session`. Sessions can be tagged, listed, and replayed.
+
+## Important SDK Details (from source code analysis)
+
+**Use `ClaudeSDKClient`, NOT bare `query()`** — The stateful client supports multi-turn, hooks, permissions, MCP management, and interrupts. Bare `query()` is one-shot only.
+
+**Computer use is NOT available** — The Agent SDK wraps Claude Code CLI which provides developer tools (Bash, Read, Write, etc.) but NOT computer use (screenshot, mouse, keyboard). Computer use requires the raw Anthropic Messages API with the computer-use beta. If we need computer use later, we add a separate Messages API path for those specific tasks.
+
+**Memory works through CLAUDE.md files** — Not a separate memory tool. Set `setting_sources=["project"]` to load `.claude/` project settings including memory.
+
+**MCP phased rollout:**
+- Phase 1: Playwright + GitHub + Memory + Context7 (core development loop)
+- Phase 2: Firecrawl + Brave Search (research and web scraping)
+- Phase 3: Slack MCP + PostgreSQL (communication and data)
+- Phase 4: Video/media MCP servers (marketing content)
 
 ## Delegation Pattern
 
