@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 
 from pipeline.config import PipelineConfig
 
@@ -25,6 +26,111 @@ _DEFAULT_MECHANIC_SYSTEM_PROMPT = (
     "or 'linear_issue' (create a ticket)\n"
     "If previous_rejections are present, check whether the worker addressed the feedback."
 )
+
+_MECHANIC_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "mechanic", "config")
+
+
+def _build_mechanic_system_prompt() -> str:
+    sections = []
+    config_dir = os.path.normpath(_MECHANIC_CONFIG_DIR)
+    for name in ("SOUL", "IDENTITY", "AGENTS"):
+        path = os.path.join(config_dir, f"{name}.md")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read().rstrip()
+            sections.append(f"# {name}\n{content}\n\n")
+    if not sections:
+        return _DEFAULT_MECHANIC_SYSTEM_PROMPT
+    return "".join(sections)
+
+
+VERDICT_SCHEMA = {
+    "name": "mechanic_verdict",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string", "enum": ["approve", "reject"]},
+            "confidence": {"type": "number"},
+            "summary": {"type": "string"},
+            "evaluation": {
+                "type": "object",
+                "properties": {
+                    "meaningful": {
+                        "type": "object",
+                        "properties": {
+                            "pass": {"type": "boolean"},
+                            "notes": {"type": "string"},
+                        },
+                        "required": ["pass", "notes"],
+                        "additionalProperties": False,
+                    },
+                    "correct": {
+                        "type": "object",
+                        "properties": {
+                            "pass": {"type": "boolean"},
+                            "notes": {"type": "string"},
+                        },
+                        "required": ["pass", "notes"],
+                        "additionalProperties": False,
+                    },
+                    "safe": {
+                        "type": "object",
+                        "properties": {
+                            "pass": {"type": "boolean"},
+                            "notes": {"type": "string"},
+                        },
+                        "required": ["pass", "notes"],
+                        "additionalProperties": False,
+                    },
+                    "minimal": {
+                        "type": "object",
+                        "properties": {
+                            "pass": {"type": "boolean"},
+                            "notes": {"type": "string"},
+                        },
+                        "required": ["pass", "notes"],
+                        "additionalProperties": False,
+                    },
+                    "reproducible": {
+                        "type": "object",
+                        "properties": {
+                            "pass": {"type": "boolean"},
+                            "notes": {"type": "string"},
+                        },
+                        "required": ["pass", "notes"],
+                        "additionalProperties": False,
+                    },
+                },
+                "required": ["meaningful", "correct", "safe", "minimal", "reproducible"],
+                "additionalProperties": False,
+            },
+            "feedback": {"type": "array", "items": {"type": "string"}},
+            "disposition": {"type": "string", "enum": ["pr", "linear_issue", "discard"]},
+            "disposition_reason": {"type": "string"},
+            "pr_title": {"type": "string"},
+            "pr_body": {"type": "string"},
+            "files_to_include": {"type": "array", "items": {"type": "string"}},
+            "files_to_exclude": {"type": "array", "items": {"type": "string"}},
+            "rejection_reason": {"type": "string"},
+        },
+        "required": [
+            "verdict",
+            "confidence",
+            "summary",
+            "evaluation",
+            "feedback",
+            "disposition",
+            "disposition_reason",
+            "pr_title",
+            "pr_body",
+            "files_to_include",
+            "files_to_exclude",
+            "rejection_reason",
+        ],
+        "additionalProperties": False,
+    },
+}
 
 
 class MechanicManager:
@@ -53,14 +159,15 @@ class MechanicManager:
         """Run a single Mechanic evaluation turn and parse the JSON verdict."""
         from claude_agent_sdk import query, ClaudeAgentOptions
 
-        async def _collect_result_text() -> str:
+        async def _collect_result_text() -> dict | str:
             result_text = ""
             assistant_text_parts: list[str] = []
 
             opts = ClaudeAgentOptions(
-                system_prompt=_DEFAULT_MECHANIC_SYSTEM_PROMPT,
+                system_prompt=_build_mechanic_system_prompt(),
                 max_turns=1,
                 permission_mode="plan",
+                output_format={"type": "json_schema", "schema": VERDICT_SCHEMA},
             )
             async for message in query(prompt=prompt, options=opts):
                 message_type = type(message).__name__
@@ -74,6 +181,9 @@ class MechanicManager:
                     continue
 
                 if message_type == "ResultMessage":
+                    structured = getattr(message, "structured_output", None)
+                    if isinstance(structured, dict):
+                        return structured
                     text = getattr(message, "result", None)
                     if isinstance(text, str) and text:
                         result_text = text
@@ -83,11 +193,11 @@ class MechanicManager:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            result_text = asyncio.run(_collect_result_text())
+            result = asyncio.run(_collect_result_text())
         else:
             import threading
 
-            runner_result: dict[str, str] = {}
+            runner_result: dict[str, dict | str] = {}
             runner_error: list[BaseException] = []
 
             def _thread_runner() -> None:
@@ -105,10 +215,12 @@ class MechanicManager:
                 )
             if runner_error:
                 raise runner_error[0]
-            result_text = runner_result.get("text", "")
+            result = runner_result.get("text", "")
 
+        if isinstance(result, dict):
+            return result
         try:
-            return json.loads(result_text)
+            return json.loads(result)
         except (TypeError, json.JSONDecodeError):
             log.warning(
                 "Mechanic verdict was not valid JSON for run %s (payload size=%d chars)",

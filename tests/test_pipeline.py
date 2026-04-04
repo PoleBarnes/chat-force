@@ -2779,3 +2779,79 @@ class TestWorkerCrashDetection:
         wm = WorkerManager(config, "test-run")
         wm._container = None
         assert wm.get_error() is None
+
+
+# =========================================================================
+# Phase 3: Mechanic persona files + structured output tests
+# =========================================================================
+
+
+class TestMechanicPersonaLoading:
+    """Test _build_mechanic_system_prompt() persona file loading."""
+
+    def test_loads_all_persona_files(self, tmp_path):
+        """Should load SOUL.md, IDENTITY.md, AGENTS.md from config dir."""
+        from pipeline.mechanic_manager import _build_mechanic_system_prompt, _MECHANIC_CONFIG_DIR
+
+        (tmp_path / "SOUL.md").write_text("Be thorough.")
+        (tmp_path / "IDENTITY.md").write_text("You are the Mechanic.")
+        (tmp_path / "AGENTS.md").write_text("Evaluate changesets.")
+
+        with patch("pipeline.mechanic_manager._MECHANIC_CONFIG_DIR", str(tmp_path)):
+            prompt = _build_mechanic_system_prompt()
+
+        assert "# SOUL" in prompt
+        assert "Be thorough." in prompt
+        assert "# IDENTITY" in prompt
+        assert "# AGENTS" in prompt
+
+    def test_falls_back_to_default_when_no_files(self, tmp_path):
+        """Should return default prompt when config dir is empty."""
+        from pipeline.mechanic_manager import _build_mechanic_system_prompt, _DEFAULT_MECHANIC_SYSTEM_PROMPT
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+
+        with patch("pipeline.mechanic_manager._MECHANIC_CONFIG_DIR", str(empty_dir)):
+            prompt = _build_mechanic_system_prompt()
+
+        assert prompt == _DEFAULT_MECHANIC_SYSTEM_PROMPT
+
+    def test_partial_files_still_works(self, tmp_path):
+        """Should work with only some persona files present."""
+        from pipeline.mechanic_manager import _build_mechanic_system_prompt
+
+        (tmp_path / "SOUL.md").write_text("Core values.")
+        # IDENTITY.md and AGENTS.md intentionally missing
+
+        with patch("pipeline.mechanic_manager._MECHANIC_CONFIG_DIR", str(tmp_path)):
+            prompt = _build_mechanic_system_prompt()
+
+        assert "Core values." in prompt
+        assert "# SOUL" in prompt
+
+
+class TestVerdictSchema:
+    """Test VERDICT_SCHEMA structure."""
+
+    def test_schema_has_required_fields(self):
+        """Schema should require all fields the pipeline consumes."""
+        from pipeline.mechanic_manager import VERDICT_SCHEMA
+
+        required = VERDICT_SCHEMA["schema"]["required"]
+        assert "verdict" in required
+        assert "files_to_include" in required
+        assert "pr_title" in required
+        assert "pr_body" in required
+        assert "feedback" in required
+        assert "disposition" in required
+
+    def test_schema_evaluation_criteria(self):
+        """Schema should have all 5 evaluation criteria."""
+        from pipeline.mechanic_manager import VERDICT_SCHEMA
+
+        eval_props = VERDICT_SCHEMA["schema"]["properties"]["evaluation"]["properties"]
+        for criterion in ["meaningful", "correct", "safe", "minimal", "reproducible"]:
+            assert criterion in eval_props
+            assert "pass" in eval_props[criterion]["properties"]
+            assert "notes" in eval_props[criterion]["properties"]
