@@ -2839,7 +2839,7 @@ class TestVerdictSchema:
         """Schema should require all fields the pipeline consumes."""
         from pipeline.mechanic_manager import VERDICT_SCHEMA
 
-        required = VERDICT_SCHEMA["schema"]["required"]
+        required = VERDICT_SCHEMA["required"]
         assert "verdict" in required
         assert "files_to_include" in required
         assert "pr_title" in required
@@ -2851,7 +2851,7 @@ class TestVerdictSchema:
         """Schema should have all 5 evaluation criteria."""
         from pipeline.mechanic_manager import VERDICT_SCHEMA
 
-        eval_props = VERDICT_SCHEMA["schema"]["properties"]["evaluation"]["properties"]
+        eval_props = VERDICT_SCHEMA["properties"]["evaluation"]["properties"]
         for criterion in ["meaningful", "correct", "safe", "minimal", "reproducible"]:
             assert criterion in eval_props
             assert "pass" in eval_props[criterion]["properties"]

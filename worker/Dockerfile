@@ -21,12 +21,13 @@ COPY --chown=worker:worker docker/config/workspace/IDENTITY.md /workspace/config
 COPY --chown=worker:worker docker/config/workspace/USER.md /workspace/config/USER.md
 COPY --chown=worker:worker docker/config/workspace/AGENTS.md /workspace/config/AGENTS.md
 
-RUN cd /workspace/config \
+RUN git config --global --add safe.directory /workspace/config \
+    && cd /workspace/config \
     && (git rev-parse --git-dir >/dev/null 2>&1 || git init) \
     && git config user.name "worker" \
     && git config user.email "worker@local" \
     && git add -A \
-    && git diff --cached --quiet || git commit -m "baseline" \
+    && (git diff --cached --quiet || git commit -m "baseline") \
     && chown -R worker:worker /workspace/config
 
 USER worker

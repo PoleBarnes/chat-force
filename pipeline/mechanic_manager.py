@@ -44,92 +44,60 @@ def _build_mechanic_system_prompt() -> str:
     return "".join(sections)
 
 
-VERDICT_SCHEMA = {
-    "name": "mechanic_verdict",
-    "strict": True,
-    "schema": {
+def _criterion_schema() -> dict:
+    return {
         "type": "object",
         "properties": {
-            "verdict": {"type": "string", "enum": ["approve", "reject"]},
-            "confidence": {"type": "number"},
-            "summary": {"type": "string"},
-            "evaluation": {
-                "type": "object",
-                "properties": {
-                    "meaningful": {
-                        "type": "object",
-                        "properties": {
-                            "pass": {"type": "boolean"},
-                            "notes": {"type": "string"},
-                        },
-                        "required": ["pass", "notes"],
-                        "additionalProperties": False,
-                    },
-                    "correct": {
-                        "type": "object",
-                        "properties": {
-                            "pass": {"type": "boolean"},
-                            "notes": {"type": "string"},
-                        },
-                        "required": ["pass", "notes"],
-                        "additionalProperties": False,
-                    },
-                    "safe": {
-                        "type": "object",
-                        "properties": {
-                            "pass": {"type": "boolean"},
-                            "notes": {"type": "string"},
-                        },
-                        "required": ["pass", "notes"],
-                        "additionalProperties": False,
-                    },
-                    "minimal": {
-                        "type": "object",
-                        "properties": {
-                            "pass": {"type": "boolean"},
-                            "notes": {"type": "string"},
-                        },
-                        "required": ["pass", "notes"],
-                        "additionalProperties": False,
-                    },
-                    "reproducible": {
-                        "type": "object",
-                        "properties": {
-                            "pass": {"type": "boolean"},
-                            "notes": {"type": "string"},
-                        },
-                        "required": ["pass", "notes"],
-                        "additionalProperties": False,
-                    },
-                },
-                "required": ["meaningful", "correct", "safe", "minimal", "reproducible"],
-                "additionalProperties": False,
-            },
-            "feedback": {"type": "array", "items": {"type": "string"}},
-            "disposition": {"type": "string", "enum": ["pr", "linear_issue", "discard"]},
-            "disposition_reason": {"type": "string"},
-            "pr_title": {"type": "string"},
-            "pr_body": {"type": "string"},
-            "files_to_include": {"type": "array", "items": {"type": "string"}},
-            "files_to_exclude": {"type": "array", "items": {"type": "string"}},
-            "rejection_reason": {"type": "string"},
+            "pass": {"type": "boolean"},
+            "notes": {"type": "string"},
         },
-        "required": [
-            "verdict",
-            "confidence",
-            "summary",
-            "evaluation",
-            "feedback",
-            "disposition",
-            "disposition_reason",
-            "pr_title",
-            "pr_body",
-            "files_to_include",
-            "files_to_exclude",
-            "rejection_reason",
-        ],
+        "required": ["pass", "notes"],
         "additionalProperties": False,
+    }
+
+
+VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["approve", "reject"]},
+        "confidence": {"type": "number"},
+        "summary": {"type": "string"},
+        "evaluation": {
+            "type": "object",
+            "properties": {
+                "meaningful": _criterion_schema(),
+                "correct": _criterion_schema(),
+                "safe": _criterion_schema(),
+                "minimal": _criterion_schema(),
+                "reproducible": _criterion_schema(),
+            },
+            "required": ["meaningful", "correct", "safe", "minimal", "reproducible"],
+            "additionalProperties": False,
+        },
+        "feedback": {"type": "array", "items": {"type": "string"}},
+        "disposition": {"type": "string", "enum": ["pr", "linear_issue", "discard"]},
+        "disposition_reason": {"type": "string"},
+        "pr_title": {"type": "string"},
+        "pr_body": {"type": "string"},
+        "files_to_include": {"type": "array", "items": {"type": "string"}},
+        "files_to_exclude": {"type": "array", "items": {"type": "string"}},
+        "rejection_reason": {"type": "string"},
     },
+    "required": [
+        "verdict",
+        "confidence",
+        "summary",
+        "evaluation",
+        "feedback",
+        "disposition",
+        "disposition_reason",
+        "pr_title",
+        "pr_body",
+        "files_to_include",
+        "files_to_exclude",
+        "rejection_reason",
+    ],
+    "additionalProperties": False,
 }
 
 
@@ -163,9 +131,12 @@ class MechanicManager:
             result_text = ""
             assistant_text_parts: list[str] = []
 
+            # max_turns=5 allows structured output to complete — the model
+            # typically responds normally first, then the Stop hook prompts
+            # it to call the StructuredOutput tool on a subsequent turn.
             opts = ClaudeAgentOptions(
                 system_prompt=_build_mechanic_system_prompt(),
-                max_turns=1,
+                max_turns=5,
                 permission_mode="plan",
                 output_format={"type": "json_schema", "schema": VERDICT_SCHEMA},
             )
