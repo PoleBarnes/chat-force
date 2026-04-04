@@ -83,6 +83,14 @@ class PRCreator:
             for fpath in files_to_include:
                 self._write_file(tmp_dir, fpath, file_contents, container_id)
 
+            # 3b. Remove deleted files from the checkout
+            deleted_files = changeset.get("git_changes", {}).get("deleted_files", [])
+            for fpath in deleted_files:
+                target = os.path.join(tmp_dir, fpath)
+                if os.path.exists(target):
+                    _run(["git", "rm", fpath], cwd=tmp_dir)
+                    log.debug("Deleted %s from PR branch", fpath)
+
             # 4. Stage, commit, push
             _run(["git", "add", "-A"], cwd=tmp_dir)
 
@@ -123,7 +131,7 @@ class PRCreator:
     # -- internals ------------------------------------------------------------
 
     def _make_branch_name(self, title: str) -> str:
-        """Return a branch name like ``openclaw/auto/20260402-153022-refactor-auth``."""
+        """Return a branch name like ``agent-sdk/auto/20260402-153022-refactor-auth``."""
         ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         slug = _slugify(title)
         return f"{self.config.pr_branch_prefix}/{ts}-{slug}"

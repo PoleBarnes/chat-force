@@ -477,6 +477,78 @@ class TestMakeBranchName:
 
 
 # =========================================================================
+# PRCreator.create() tests
+# =========================================================================
+
+
+class TestPRCreatorDeletedFiles:
+    """Test that PRCreator.create() handles deleted files."""
+
+    def test_deleted_files_are_removed_from_checkout(self, tmp_path):
+        """Files in git_changes.deleted_files should be git-rm'd from the PR branch."""
+        config = PipelineConfig(output_base=str(tmp_path))
+        pr = PRCreator(config, "test-run")
+
+        # Set up a fake git repo as the "clone" target
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        (repo_dir / "keep.py").write_text("keep this")
+        (repo_dir / "old-config.yaml").write_text("delete this")
+        subprocess.run(["git", "init"], cwd=str(repo_dir), capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "test"], cwd=str(repo_dir), capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test"], cwd=str(repo_dir), capture_output=True)
+        subprocess.run(["git", "add", "-A"], cwd=str(repo_dir), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo_dir), capture_output=True)
+
+        changeset = {
+            "task": "cleanup config",
+            "git_changes": {
+                "new_files": [],
+                "modified_files": ["keep.py"],
+                "deleted_files": ["old-config.yaml"],
+                "file_contents": {"keep.py": "updated content"},
+            },
+            "worker_container": None,
+        }
+        verdict = {
+            "approved": True,
+            "pr_title": "Cleanup config",
+            "pr_body": "Remove old config",
+            "files_to_include": ["keep.py"],
+        }
+
+        # Mock out clone/push/gh — we only care about the file operations
+        import pipeline.pr_creator as pr_mod
+        original_run = pr_mod._run
+
+        commands_run = []
+
+        def fake_run(cmd, *, cwd=None, check=True):
+            commands_run.append(cmd)
+            if cmd[0] == "git" and cmd[1] == "clone":
+                # Copy our repo instead of cloning
+                import shutil
+                shutil.copytree(str(repo_dir), cmd[-1], dirs_exist_ok=True)
+                return ""
+            if cmd[0] == "git" and cmd[1] == "push":
+                return ""
+            if cmd[0] == "gh":
+                return "https://github.com/test/pr/1"
+            return original_run(cmd, cwd=cwd, check=check)
+
+        with patch("pipeline.pr_creator._run", side_effect=fake_run):
+            pr.create(changeset, verdict)
+
+        # Verify git rm was called for the deleted file
+        rm_commands = [c for c in commands_run if c[0] == "git" and c[1] == "rm"]
+        assert len(rm_commands) == 1
+        assert "old-config.yaml" in rm_commands[0]
+
+
+import subprocess  # ensure subprocess is available for the test above
+
+
+# =========================================================================
 # SlackHandler tests
 # =========================================================================
 
