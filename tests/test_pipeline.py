@@ -252,12 +252,41 @@ class TestPipelineConfig:
         """Config should have meaningful defaults for all fields."""
         config = PipelineConfig()
         assert config.worker_image == "chat-force-worker:latest"
-        assert config.mechanic_image == "chat-force-mechanic:latest"
         assert config.worker_timeout == 600
         assert config.mechanic_timeout == 300
-        assert config.webhook_port == 8787
         assert config.github_repo == "PoleBarnes/chat-force"
-        assert config.pr_branch_prefix == "openclaw/auto"
+        assert config.pr_branch_prefix == "agent-sdk/auto"
+
+    def test_agent_sdk_defaults(self):
+        """Config should have Agent SDK-specific defaults."""
+        config = PipelineConfig()
+        assert config.claude_code_token_env == "CLAUDE_CODE_OAUTH_TOKEN"
+        assert config.max_budget_usd == 5.0
+        assert config.max_turns == 50
+        assert config.permission_mode == "bypassPermissions"
+        assert isinstance(config.allowed_tools, list)
+        assert "Bash" in config.allowed_tools
+        assert "Read" in config.allowed_tools
+        assert "Write" in config.allowed_tools
+        assert "Edit" in config.allowed_tools
+        assert "Agent" in config.allowed_tools
+
+    def test_no_webhook_fields(self):
+        """Config should NOT have webhook fields (removed in SDK pivot)."""
+        config = PipelineConfig()
+        assert not hasattr(config, "webhook_host")
+        assert not hasattr(config, "webhook_port")
+
+    def test_no_mechanic_image(self):
+        """Config should NOT have mechanic_image (Mechanic runs on host)."""
+        config = PipelineConfig()
+        assert not hasattr(config, "mechanic_image")
+
+    def test_no_anthropic_token_env(self):
+        """Config should use claude_code_token_env, not anthropic_token_env."""
+        config = PipelineConfig()
+        assert not hasattr(config, "anthropic_token_env")
+        assert config.claude_code_token_env == "CLAUDE_CODE_OAUTH_TOKEN"
 
     def test_post_init_creates_output_dir(self, tmp_path):
         """__post_init__ should create output_base if it does not exist."""
@@ -279,10 +308,14 @@ class TestPipelineConfig:
         config = PipelineConfig(
             worker_timeout=60,
             mechanic_timeout=30,
+            max_budget_usd=10.0,
+            max_turns=100,
             output_base=str(tmp_path),
         )
         assert config.worker_timeout == 60
         assert config.mechanic_timeout == 30
+        assert config.max_budget_usd == 10.0
+        assert config.max_turns == 100
 
 
 # =========================================================================
@@ -660,14 +693,14 @@ class TestMakeBranchName:
     def test_branch_has_prefix(self, pr_creator):
         """Branch name should start with the configured prefix."""
         branch = pr_creator._make_branch_name("Refactor auth module")
-        assert branch.startswith("openclaw/auto/")
+        assert branch.startswith("agent-sdk/auto/")
 
     def test_branch_contains_timestamp(self, pr_creator):
         """Branch name should contain a YYYYMMDD-HHMMSS timestamp."""
         branch = pr_creator._make_branch_name("Update tests")
         # After the prefix, the timestamp is the next 15 chars (YYYYMMDD-HHMMSS)
         parts = branch.split("/")
-        # parts: ["openclaw", "auto", "YYYYMMDD-HHMMSS-slug"]
+        # parts: ["agent-sdk", "auto", "YYYYMMDD-HHMMSS-slug"]
         tail = parts[2]
         ts_part = tail[:15]  # YYYYMMDD-HHMMSS
         assert len(ts_part) == 15
@@ -2354,3 +2387,162 @@ class TestThreadReplyRouting:
 
         h["session_manager"].get_session.assert_not_called()
         h["session_manager"].send_message.assert_not_called()
+
+
+# =========================================================================
+# Worker Entrypoint tests (Agent SDK pivot — Step 2)
+# =========================================================================
+
+
+class TestWorkerEntrypoint:
+    """Test worker/entrypoint.py functions for the Agent SDK worker."""
+
+    def test_build_system_prompt_includes_workspace_files(self, tmp_path):
+        """System prompt should combine SOUL.md, IDENTITY.md, USER.md, AGENTS.md."""
+        from worker.entrypoint import build_system_prompt
+
+        (tmp_path / "SOUL.md").write_text("You are Leo.")
+        (tmp_path / "IDENTITY.md").write_text("Name: Leo")
+        (tmp_path / "USER.md").write_text("Name: Travis")
+        (tmp_path / "AGENTS.md").write_text("Session startup rules")
+
+        prompt = build_system_prompt(str(tmp_path))
+
+        assert "You are Leo." in prompt
+        assert "Name: Leo" in prompt
+        assert "Name: Travis" in prompt
+        assert "Session startup rules" in prompt
+
+    def test_build_system_prompt_handles_missing_files(self, tmp_path):
+        """System prompt should not crash if some workspace files are missing."""
+        from worker.entrypoint import build_system_prompt
+
+        (tmp_path / "SOUL.md").write_text("You are Leo.")
+        # IDENTITY.md, USER.md, AGENTS.md intentionally missing
+
+        prompt = build_system_prompt(str(tmp_path))
+        assert "You are Leo." in prompt
+
+    def test_pre_tool_use_hook_logs_to_tool_log(self, tmp_path):
+        """PreToolUse hook should append a JSON line to the tool log."""
+        from worker.entrypoint import create_pre_tool_use_hook
+        import asyncio
+
+        tool_log = tmp_path / "tool-log.jsonl"
+        hook = create_pre_tool_use_hook(str(tool_log))
+
+        input_data = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_use_id": "tu_123",
+            "session_id": "sess_abc",
+            "transcript_path": "/tmp/transcript",
+            "cwd": "/workspace",
+        }
+
+        result = asyncio.run(hook(input_data, "tu_123", {"signal": None}))
+
+        assert tool_log.exists()
+        logged = json.loads(tool_log.read_text().strip())
+        assert logged["event"] == "PreToolUse"
+        assert logged["tool_name"] == "Bash"
+        assert logged["tool_input"] == {"command": "ls"}
+        # Hook should not block execution
+        assert result.get("continue_", True) is True
+
+    def test_post_tool_use_hook_logs_to_tool_log(self, tmp_path):
+        """PostToolUse hook should append a JSON line with tool response."""
+        from worker.entrypoint import create_post_tool_use_hook
+        import asyncio
+
+        tool_log = tmp_path / "tool-log.jsonl"
+        hook = create_post_tool_use_hook(str(tool_log))
+
+        input_data = {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/workspace/README.md"},
+            "tool_response": "file contents here",
+            "tool_use_id": "tu_456",
+            "session_id": "sess_abc",
+            "transcript_path": "/tmp/transcript",
+            "cwd": "/workspace",
+        }
+
+        result = asyncio.run(hook(input_data, "tu_456", {"signal": None}))
+
+        lines = tool_log.read_text().strip().split("\n")
+        assert len(lines) == 1
+        logged = json.loads(lines[0])
+        assert logged["event"] == "PostToolUse"
+        assert logged["tool_name"] == "Read"
+        assert logged["tool_response"] == "file contents here"
+
+    def test_stop_hook_writes_sentinel_and_usage(self, tmp_path):
+        """Stop hook should write session-complete sentinel and usage.json."""
+        from worker.entrypoint import create_stop_hook
+        import asyncio
+
+        sentinel = tmp_path / "session-complete"
+        usage_file = tmp_path / "usage.json"
+        usage_tracker = {"input_tokens": 1500, "output_tokens": 500, "total_cost_usd": 0.05}
+
+        hook = create_stop_hook(
+            sentinel_path=str(sentinel),
+            usage_path=str(usage_file),
+            usage_tracker=usage_tracker,
+        )
+
+        input_data = {
+            "stop_hook_active": True,
+            "session_id": "sess_abc",
+            "transcript_path": "/tmp/transcript",
+            "cwd": "/workspace",
+        }
+
+        result = asyncio.run(hook(input_data, None, {"signal": None}))
+
+        assert sentinel.exists()
+        assert usage_file.exists()
+        usage_data = json.loads(usage_file.read_text())
+        assert usage_data["input_tokens"] == 1500
+        assert usage_data["output_tokens"] == 500
+        assert usage_data["total_cost_usd"] == 0.05
+
+    def test_multiple_hook_events_append_to_same_log(self, tmp_path):
+        """Multiple hook events should produce multiple JSONL lines."""
+        from worker.entrypoint import create_pre_tool_use_hook, create_post_tool_use_hook
+        import asyncio
+
+        tool_log = tmp_path / "tool-log.jsonl"
+        pre_hook = create_pre_tool_use_hook(str(tool_log))
+        post_hook = create_post_tool_use_hook(str(tool_log))
+
+        pre_input = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hi"},
+            "tool_use_id": "tu_1",
+            "session_id": "s1",
+            "transcript_path": "/tmp/t",
+            "cwd": "/w",
+        }
+        post_input = {
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo hi"},
+            "tool_response": "hi\n",
+            "tool_use_id": "tu_1",
+            "session_id": "s1",
+            "transcript_path": "/tmp/t",
+            "cwd": "/w",
+        }
+
+        asyncio.run(pre_hook(pre_input, "tu_1", {"signal": None}))
+        asyncio.run(post_hook(post_input, "tu_1", {"signal": None}))
+
+        lines = tool_log.read_text().strip().split("\n")
+        assert len(lines) == 2
+        assert json.loads(lines[0])["event"] == "PreToolUse"
+        assert json.loads(lines[1])["event"] == "PostToolUse"

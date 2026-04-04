@@ -1,32 +1,35 @@
-# Worker container — a disposable OpenClaw instance that executes a single task.
-# Runs the full Gateway internally so the agent has shell, file, and web tools.
-# The repo is COPYed from the build context so docker diff captures all changes.
-
-FROM ghcr.io/openclaw/openclaw:latest
+FROM python:3.13-slim
 
 USER root
 
-# Create directories the entrypoint needs.
-# /workspace is owned by root so the agent can't write outside /workspace/config.
-RUN mkdir -p /workspace/config /home/node/.openclaw && \
-    chown -R node:node /workspace/config /home/node/.openclaw
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy entrypoint
-COPY worker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN useradd --create-home --shell /bin/sh worker \
+    && mkdir -p /app /workspace/config /tmp \
+    && chown -R worker:worker /workspace/config \
+    && chmod 1777 /tmp
 
-USER node
+RUN pip install --no-cache-dir claude-agent-sdk
 
-# Copy the repo from the build context
-COPY --chown=node:node . /workspace/config
+COPY worker/entrypoint.py /app/entrypoint.py
 
-# Copy workspace identity files (SOUL, IDENTITY, etc.) into repo root
-RUN cp /workspace/config/docker/config/workspace/*.md /workspace/config/ 2>/dev/null || true
+COPY --chown=worker:worker . /workspace/config
+COPY --chown=worker:worker docker/config/workspace/SOUL.md /workspace/config/SOUL.md
+COPY --chown=worker:worker docker/config/workspace/IDENTITY.md /workspace/config/IDENTITY.md
+COPY --chown=worker:worker docker/config/workspace/USER.md /workspace/config/USER.md
+COPY --chown=worker:worker docker/config/workspace/AGENTS.md /workspace/config/AGENTS.md
 
-# Point OpenClaw's workspace at the git repo
-RUN ln -s /workspace/config /home/node/.openclaw/workspace
+RUN git -C /workspace/config init \
+    && git -C /workspace/config config user.name "worker" \
+    && git -C /workspace/config config user.email "worker@local" \
+    && git -C /workspace/config add . \
+    && git -C /workspace/config commit -m "baseline" \
+    && chown -R worker:worker /workspace/config
 
-# Install the afterTurn hook
-COPY --chown=node:node worker/hooks/notify-orchestrator/ /home/node/.openclaw/hooks/notify-orchestrator/
+USER worker
 
-ENTRYPOINT ["/entrypoint.sh"]
+WORKDIR /workspace/config
+
+ENTRYPOINT ["python", "/app/entrypoint.py"]

@@ -1,14 +1,13 @@
 """Pipeline configuration -- all tunables live here."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class PipelineConfig:
     # Docker
     worker_image: str = "chat-force-worker:latest"
-    mechanic_image: str = "chat-force-mechanic:latest"
     docker_network: str = "chat-force-net"
 
     # Timeouts (seconds)
@@ -21,19 +20,33 @@ class PipelineConfig:
 
     # GitHub
     github_repo: str = "PoleBarnes/chat-force"
-    pr_branch_prefix: str = "openclaw/auto"
-
-    # Webhook
-    webhook_host: str = "0.0.0.0"
-    webhook_port: int = 8787
+    pr_branch_prefix: str = "agent-sdk/auto"
 
     # Session
     session_idle_timeout: int = 600  # 10 minutes
 
     # Secrets (from Doppler -- never hardcode values here)
     github_token_env: str = "GITHUB_TOKEN"
-    anthropic_token_env: str = "ANTHROPIC_AUTH_TOKEN"
+    claude_code_token_env: str = "CLAUDE_CODE_OAUTH_TOKEN"
     slack_token_env: str = "SLACK_BOT_TOKEN"
+    max_budget_usd: float = 5.0
+    max_turns: int = 50
+    permission_mode: str = "bypassPermissions"
+    allowed_tools: list[str] = field(
+        default_factory=lambda: [
+            "Bash",
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "WebSearch",
+            "WebFetch",
+            "Agent",
+            "NotebookEdit",
+            "TodoWrite",
+        ]
+    )
 
     def __post_init__(self):
         os.makedirs(self.output_base, exist_ok=True)
