@@ -159,6 +159,12 @@ Key principles:
 - **Structured output** — Enforced JSON schemas for verdicts
 - **Per-task cost tracking** — Real token/cost data per query()
 - **Permission controls** — Fine-grained tool access per task
+- **Python hooks (PreToolUse, PostToolUse, Stop, etc.)** — Real-time observability of every tool call. Hooks run in our Python process, not shell commands. The Mechanic gets a complete ordered log of what the agent did, not just the end-state diff. Key hooks:
+  - `PostToolUse` — capture every tool call result for audit/Mechanic analysis
+  - `PreToolUse` — audit logging, policy enforcement (block dangerous commands)
+  - `Stop` — trigger changeset extraction when agent finishes
+  - `SubagentStart/Stop` — track sub-agent activity
+  - `PermissionRequest` — auto-approve/deny based on policy
 
 ## Delegation Pattern
 
