@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, sprint/*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Run tests
+        run: |
+          uv run --python 3.13 \
+            --with docker,pytest,"slack_sdk>=3.41.0","slack_bolt>=1.27.0" \
+            pytest tests/test_pipeline.py -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Syntax check
+        run: |
+          uv run --python 3.13 python -c "
+          import py_compile, sys, glob
+          errors = []
+          for f in glob.glob('pipeline/**/*.py', recursive=True):
+              try:
+                  py_compile.compile(f, doraise=True)
+              except py_compile.PyCompileError as e:
+                  errors.append(str(e))
+          if errors:
+              print('\n'.join(errors))
+              sys.exit(1)
+          print('All files OK')
+          "
