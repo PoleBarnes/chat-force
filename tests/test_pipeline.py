@@ -2945,3 +2945,76 @@ class TestPRCreatorAuth:
 
         gh_cmd = next(c for c in commands if c["cmd"][0] == "gh")
         assert gh_cmd["env"]["GH_TOKEN"] == "ghp_test123"
+
+
+# =========================================================================
+# Smart _ensure_image tests (ratchet mechanism)
+# =========================================================================
+
+
+class TestEnsureImageRatchet:
+    """Test WorkerManager._ensure_image() rebuilds when code changes."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    def test_skips_build_when_hash_image_exists(self, config):
+        """Should skip build if image tagged with current git hash exists."""
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_client = MagicMock()
+            mock_docker.from_env.return_value = mock_client
+
+            wm = WorkerManager(config, "test-run")
+
+            with patch.object(wm, "_git_head_hash", return_value="abc1234"):
+                # Hash-tagged image exists
+                mock_client.images.get.return_value = MagicMock()
+                wm._ensure_image()
+
+            mock_client.images.build.assert_not_called()
+
+    def test_rebuilds_when_hash_changes(self, config):
+        """Should rebuild if hash-tagged image doesn't exist but base does."""
+        from docker.errors import ImageNotFound
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_client = MagicMock()
+            mock_docker.from_env.return_value = mock_client
+
+            wm = WorkerManager(config, "test-run")
+
+            def get_image(tag):
+                if "abc1234" in tag:
+                    raise ImageNotFound("not found")
+                return MagicMock()  # base image exists
+
+            mock_client.images.get.side_effect = get_image
+            mock_client.images.build.return_value = (MagicMock(), [])
+
+            with patch.object(wm, "_git_head_hash", return_value="abc1234"):
+                wm._ensure_image()
+
+            mock_client.images.build.assert_called_once()
+
+    def test_builds_when_no_image_at_all(self, config):
+        """Should build from scratch if no image exists."""
+        from docker.errors import ImageNotFound
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_client = MagicMock()
+            mock_docker.from_env.return_value = mock_client
+
+            built_image = MagicMock()
+            # First two get() calls fail (hash tag, base tag), third succeeds (post-build tag)
+            mock_client.images.get.side_effect = [
+                ImageNotFound("hash not found"),
+                ImageNotFound("base not found"),
+                built_image,  # post-build get for tagging
+            ]
+            mock_client.images.build.return_value = (built_image, [])
+
+            wm = WorkerManager(config, "test-run")
+            with patch.object(wm, "_git_head_hash", return_value="abc1234"):
+                wm._ensure_image()
+
+            mock_client.images.build.assert_called_once()
+            built_image.tag.assert_called_once()  # tagged with hash

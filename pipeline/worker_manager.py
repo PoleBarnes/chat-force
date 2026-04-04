@@ -279,16 +279,56 @@ class WorkerManager:
     # -- internals ------------------------------------------------------------
 
     def _ensure_image(self) -> None:
-        """Build the Worker image if it doesn't exist locally."""
+        """Build the Worker image if it doesn't exist or code has changed.
+
+        Tags each build with the current git HEAD hash. On subsequent
+        calls, if the hash-tagged image already exists the build is
+        skipped. After a merge to main (new hash), the image is
+        automatically rebuilt — this is the ratchet mechanism.
+        """
+        git_hash = self._git_head_hash()
+        version_tag = f"{self.config.worker_image}-{git_hash}" if git_hash else ""
+
+        # Check if an image for this exact commit already exists.
+        if version_tag:
+            try:
+                self._client.images.get(version_tag)
+                log.debug("Worker image up to date: %s", version_tag)
+                return
+            except ImageNotFound:
+                pass
+
+        # Fall back to checking if the base image exists at all.
         try:
             self._client.images.get(self.config.worker_image)
-            log.debug("Worker image found: %s", self.config.worker_image)
+            if not version_tag:
+                log.debug("Worker image found (no git hash): %s", self.config.worker_image)
+                return
+            # Base image exists but is stale (wrong hash).
+            log.info("Worker image stale, rebuilding for %s ...", git_hash)
         except ImageNotFound:
             log.info("Worker image not found, building %s ...", self.config.worker_image)
-            self._client.images.build(
-                path=".",
-                dockerfile="worker/Dockerfile",
-                tag=self.config.worker_image,
-                rm=True,
+
+        self._client.images.build(
+            path=".",
+            dockerfile="worker/Dockerfile",
+            tag=self.config.worker_image,
+            rm=True,
+        )
+        # Also tag with the git hash so the next call skips the build.
+        if version_tag:
+            image = self._client.images.get(self.config.worker_image)
+            image.tag(version_tag)
+        log.info("Worker image built: %s (%s)", self.config.worker_image, git_hash or "no hash")
+
+    @staticmethod
+    def _git_head_hash() -> str:
+        """Return the short hash of HEAD, or empty string on failure."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=10, check=True,
             )
-            log.info("Worker image built: %s", self.config.worker_image)
+            return result.stdout.strip()
+        except Exception:
+            return ""

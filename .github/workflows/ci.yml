@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, sprint/*]
+    branches: [main, sprint/*, pivot/*]
   pull_request:
     branches: [main]
 
@@ -19,7 +19,7 @@ jobs:
         run: |
           uv run --python 3.13 \
             --with docker,pytest,"slack_sdk>=3.41.0","slack_bolt>=1.27.0" \
-            pytest tests/test_pipeline.py tests/test_slack_integration.py -v
+            pytest tests/test_pipeline.py tests/test_e2e_integration.py tests/test_slack_integration.py -v
 
   lint:
     runs-on: ubuntu-latest
@@ -34,7 +34,7 @@ jobs:
           uv run --python 3.13 python -c "
           import py_compile, sys, glob
           errors = []
-          for f in glob.glob('pipeline/**/*.py', recursive=True):
+          for f in glob.glob('pipeline/**/*.py', recursive=True) + glob.glob('worker/**/*.py', recursive=True):
               try:
                   py_compile.compile(f, doraise=True)
               except py_compile.PyCompileError as e:
@@ -44,3 +44,30 @@ jobs:
               sys.exit(1)
           print('All files OK')
           "
+
+  build-worker:
+    needs: [test, lint]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: worker/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/worker:latest
+            ghcr.io/${{ github.repository }}/worker:${{ github.sha }}
