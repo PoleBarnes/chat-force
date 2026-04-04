@@ -137,10 +137,13 @@ class WorkerManager:
                 capture_output=True,
                 timeout=10,
             )
-            # docker cp creates the file as root; must chmod as root so the
-            # non-root worker user can read it.
+            # docker cp creates the file as root. The worker user must be
+            # able to both READ and UNLINK the file (the entrypoint deletes
+            # it after reading). chown transfers ownership so the worker
+            # user owns the file outright — avoids sticky-bit unlink issues
+            # on /tmp.
             subprocess.run(
-                ["docker", "exec", "-u", "root", self._container.id, "chmod", "644", "/tmp/next-message.txt"],
+                ["docker", "exec", "-u", "root", self._container.id, "chown", "worker:worker", "/tmp/next-message.txt"],
                 check=False,  # best effort
                 capture_output=True,
                 timeout=5,

@@ -118,16 +118,26 @@ def test_send_message_readable_by_non_root_user(tmp_path, nonroot_worker_contain
 
     wm.send_message("hello from the orchestrator")
 
-    # CRITICAL CHECK: the worker (non-root) user — which is the DEFAULT
-    # user in this container due to USER worker — must be able to read
-    # /tmp/next-message.txt. If chmod wasn't run as root, the file is
-    # still root-owned with default umask and the worker can't read it.
+    # CRITICAL CHECK 1: the worker (non-root) user — which is the DEFAULT
+    # user in this container due to USER worker — must be able to READ
+    # /tmp/next-message.txt. If chown wasn't run as root, the file is
+    # still root-owned and the worker can't read it.
     result = container.exec_run(["cat", "/tmp/next-message.txt"])
     assert result.exit_code == 0, (
         f"Default (worker) user cannot read /tmp/next-message.txt: "
         f"exit={result.exit_code}, output={result.output!r}"
     )
     assert b"hello from the orchestrator" in result.output
+
+    # CRITICAL CHECK 2: the worker user must also be able to UNLINK the
+    # file. The real entrypoint does NEXT_MESSAGE_PATH.unlink() after
+    # reading. If the file is root-owned, /tmp's sticky bit blocks the
+    # unlink even though the worker has read access.
+    result = container.exec_run(["rm", "/tmp/next-message.txt"])
+    assert result.exit_code == 0, (
+        f"Default (worker) user cannot unlink /tmp/next-message.txt: "
+        f"exit={result.exit_code}, output={result.output!r}"
+    )
 
 
 def test_send_message_clears_sentinel(tmp_path, nonroot_worker_container):
