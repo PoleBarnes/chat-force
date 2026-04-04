@@ -2001,6 +2001,60 @@ class TestWorkerManager:
 
         assert call_order.index("reset") < call_order.index("docker_cp")
 
+    def test_send_message_chmods_file_after_docker_cp(self, config, mock_docker):
+        """send_message should chmod 644 the file AFTER docker cp so a non-root
+        container process can read it. Regression test for the bug where docker
+        cp wrote the file as root and the node user got Permission denied."""
+        webhook = MagicMock()
+        wm = WorkerManager(config, "test-run", webhook=webhook)
+        wm._container = mock_docker["container"]
+        container_id = mock_docker["container"].id
+
+        call_order = []
+
+        def record_call(*args, **kwargs):
+            cmd = args[0]
+            if cmd[0] == "docker" and cmd[1] == "cp":
+                call_order.append("docker_cp")
+            elif cmd[0] == "docker" and cmd[1] == "exec":
+                call_order.append("docker_exec_chmod")
+
+        with patch("pipeline.worker_manager.subprocess") as mock_sub:
+            mock_sub.run.side_effect = record_call
+            with patch("pipeline.worker_manager.tempfile") as mock_tmp:
+                mock_file = MagicMock()
+                mock_file.__enter__ = MagicMock(return_value=mock_file)
+                mock_file.__exit__ = MagicMock(return_value=False)
+                mock_file.name = "/tmp/fake-msg.txt"
+                mock_tmp.NamedTemporaryFile.return_value = mock_file
+
+                with patch("pipeline.worker_manager.os.unlink"):
+                    wm.send_message("hello from orchestrator")
+
+        # chmod must be called
+        assert "docker_exec_chmod" in call_order, (
+            "send_message must call docker exec chmod after docker cp"
+        )
+
+        # chmod must come AFTER cp, not before
+        assert call_order.index("docker_cp") < call_order.index("docker_exec_chmod"), (
+            f"chmod must happen after cp, got order: {call_order}"
+        )
+
+        # Verify the exact chmod command args
+        chmod_call = [
+            c for c in mock_sub.run.call_args_list
+            if c[0][0][1] == "exec"
+        ][0]
+        assert chmod_call[0][0] == [
+            "docker", "exec", container_id, "chmod", "644", "/tmp/next-message.txt"
+        ]
+
+        # chmod uses check=False so failures don't crash the pipeline
+        assert chmod_call[1].get("check") is False, (
+            "chmod call must use check=False (best-effort)"
+        )
+
     @patch("pipeline.worker_manager.subprocess")
     def test_get_response_reads_and_parses(self, mock_sub, config, mock_docker):
         """get_response should docker cp the file and parse the JSON."""
