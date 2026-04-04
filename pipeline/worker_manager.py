@@ -121,6 +121,12 @@ class WorkerManager:
                 capture_output=True,
                 timeout=10,
             )
+            subprocess.run(
+                ["docker", "exec", self._container.id, "chmod", "644", "/tmp/next-message.txt"],
+                check=False,  # best effort
+                capture_output=True,
+                timeout=5,
+            )
             log.info("Message sent to Worker (%d chars)", len(message))
         finally:
             os.unlink(tmp_path)
