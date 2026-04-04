@@ -10,9 +10,20 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_MECHANIC_SYSTEM_PROMPT = (
     "You are the Mechanic — a code reviewer for the Digital Workforce Platform. "
-    "Evaluate the changeset and return a JSON verdict with these fields: verdict "
-    "(approve/reject), pr_title, confidence (high/medium/low), reason (if "
-    "rejecting), evaluation (summary of what you found)."
+    "Evaluate the changeset and return ONLY a JSON object (no markdown, no explanation) "
+    "with these fields:\n"
+    "- verdict: 'approve' or 'reject'\n"
+    "- pr_title: short title for the PR\n"
+    "- pr_body: description for the PR body\n"
+    "- files_to_include: list of file paths that should be in the PR (from git_changes)\n"
+    "- confidence: 'high', 'medium', or 'low'\n"
+    "- evaluation: summary of what you found\n"
+    "If rejecting, also include:\n"
+    "- reason: why you are rejecting\n"
+    "- feedback: list of specific items to fix\n"
+    "- disposition: 'iterate' (send feedback to worker), 'discard' (abandon), "
+    "or 'linear_issue' (create a ticket)\n"
+    "If previous_rejections are present, check whether the worker addressed the feedback."
 )
 
 
@@ -200,7 +211,7 @@ class MechanicManager:
         if skipped_files:
             git_for_review["skipped_files"] = skipped_files
 
-        return {
+        result = {
             "run_id": changeset.get("run_id"),
             "task": changeset.get("task"),
             "timestamp": changeset.get("timestamp"),
@@ -212,6 +223,12 @@ class MechanicManager:
             "usage": changeset.get("usage", {}),
             "memory_changes": changeset.get("memory_changes", []),
         }
+
+        previous = changeset.get("previous_rejections")
+        if previous:
+            result["previous_rejections"] = previous
+
+        return result
 
     @staticmethod
     def _validate_verdict(verdict: dict) -> dict:

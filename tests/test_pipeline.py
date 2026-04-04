@@ -366,6 +366,28 @@ class TestMechanicManagerSDK:
         evaluation = mm._prepare_evaluation(changeset)
         assert evaluation["usage"] == usage
 
+    def test_evaluate_forwards_previous_rejections(self, config):
+        """_prepare_evaluation should forward previous_rejections when present."""
+        mm = MechanicManager(config, "test-run")
+
+        rejections = [{"iteration": 1, "reason": "Missing tests"}]
+        changeset = {
+            "task": "test",
+            "git_changes": {},
+            "previous_rejections": rejections,
+        }
+
+        evaluation = mm._prepare_evaluation(changeset)
+        assert evaluation["previous_rejections"] == rejections
+
+    def test_evaluate_omits_previous_rejections_when_absent(self, config):
+        """_prepare_evaluation should not include previous_rejections if not in changeset."""
+        mm = MechanicManager(config, "test-run")
+        changeset = {"task": "test", "git_changes": {}}
+
+        evaluation = mm._prepare_evaluation(changeset)
+        assert "previous_rejections" not in evaluation
+
     def test_no_docker_dependency(self, config):
         """MechanicManager should NOT import or use Docker."""
         mm = MechanicManager(config, "test-run")

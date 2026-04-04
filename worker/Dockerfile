@@ -21,11 +21,12 @@ COPY --chown=worker:worker docker/config/workspace/IDENTITY.md /workspace/config
 COPY --chown=worker:worker docker/config/workspace/USER.md /workspace/config/USER.md
 COPY --chown=worker:worker docker/config/workspace/AGENTS.md /workspace/config/AGENTS.md
 
-RUN git -C /workspace/config init \
-    && git -C /workspace/config config user.name "worker" \
-    && git -C /workspace/config config user.email "worker@local" \
-    && git -C /workspace/config add . \
-    && git -C /workspace/config commit -m "baseline" \
+RUN cd /workspace/config \
+    && (git rev-parse --git-dir >/dev/null 2>&1 || git init) \
+    && git config user.name "worker" \
+    && git config user.email "worker@local" \
+    && git add -A \
+    && git diff --cached --quiet || git commit -m "baseline" \
     && chown -R worker:worker /workspace/config
 
 USER worker
