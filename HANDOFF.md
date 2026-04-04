@@ -1,155 +1,151 @@
 # HANDOFF — Digital Workforce Platform
 
-> **Read this first.** This document is the single entry point for any new agent session.
-> It describes the architecture, what exists, what to build next, and the rules you must follow.
+> **Read this first.** This document is the entry point for any new agent session.
+> It describes the current architecture, what is implemented, and the rules that govern changes.
 
 ---
 
 ## What This Project Is
 
-A self-improving AI agent platform. One agent — Leo — handles customer work (marketing, research, project management) via Slack. Leo runs in a sandboxed Docker container. Every session produces a changeset. A separate Mechanic agent evaluates the changeset. If approved, a PR is created. Human reviews and merges. The next session runs on the improved codebase. The system ratchets forward — it can only get better or stay the same, never regress.
+A self-improving AI agent platform. Leo handles customer-facing work in a sandboxed Worker container. Each run produces a mechanical changeset. A separate Mechanic reviews that changeset and decides whether it is good enough to become a PR. Human review remains the final gate. The system is designed so the codebase can improve over time without direct mutation of `main`.
+
+The platform originally used OpenClaw. That runtime has been replaced by the **Claude Agent SDK** (`pip install claude-agent-sdk`). The Worker now runs the SDK inside Docker, and the Mechanic runs on the host through the SDK's `query()` interface.
 
 ---
 
 ## Repository Layout
 
-```
-chat-force/                         # Root — this repo IS the agent's codebase
-  HANDOFF.md                        # You are here
-  JOURNAL.md                        # Engineering decisions and history
-  REQUIREMENTS.md                   # Requirements tracker with status
-  ORCHESTRATOR-PROMPT.md            # Operating instructions for the build orchestrator
-  Digital-Workforce-Platform-FINAL-v3.1.md  # Original product spec (vision, tiers, pricing)
-  base-config.yaml                  # Platform-level config
+```text
+chat-force/
+  HANDOFF.md
+  JOURNAL.md
+  REQUIREMENTS.md
+  ORCHESTRATOR-PROMPT.md
+  PIVOT-PLAN.md
+  SPRINT-PLAN.md
+  CLAUDE.md
+  Digital-Workforce-Platform-FINAL-v3.1.md
+  base-config.yaml
 
-  skills/                           # OpenClaw skills (7 skills, markdown format)
-    ad-campaign-research.md
-    ad-campaign-generate.md
-    code-review.md
-    morning-briefing.md
-    pr-creation.md
-    research.md
-    sop-detection.md
+  worker/
+    Dockerfile                       # python:3.13-slim + claude-agent-sdk
+    entrypoint.py                    # Worker runtime, hooks, sentinel, usage, tool log
 
-  sops/                             # SOP templates (YAML, platform-level)
-    ad-campaign.yaml                # 17 steps, 2 approval gates
-    landing-page.yaml
-    email-sequence.yaml
-    sop-template.yaml               # Template for creating new SOPs
+  pipeline/
+    main.py                          # CLI pipeline entrypoint
+    worker_manager.py                # Worker container lifecycle + polling
+    mechanic_manager.py              # Host-side Mechanic via Agent SDK query()
+    changeset_extractor.py           # git diff, docker diff, telemetry, artifacts
+    session_manager.py               # Multi-message session lifecycle
+    pr_creator.py                    # PR creation via gh CLI
+    slack_handler.py                 # Slack notifications
+    config.py
 
-  mechanics/                        # Mechanic prompts and evaluation criteria
-    mechanic-a-prompt.md            # Worker Analysis (post-session)
-    mechanic-b-prompt.md            # Workflow Analysis (deferred)
-    mechanic-c-scout-prompt.md      # The Scout (daily research)
-    meta-mechanic-prompt.md         # Reviews the mechanics (weekly, deferred)
-    evaluation-criteria.yaml
+  mechanic/
+    config/                          # Mechanic prompt context
 
-  orchestrator/                     # LangGraph code (for future structured workflows)
-    graphs/
-    nodes/
-    langgraph.json
-    requirements.txt
-
-  audit/                            # Audit logging
-    audit_logger.py
-    secret_patterns.py
-
-  security/                         # Security config
-    exec-approvals.json
-    secret-injection.md
-    self-modification-guard.md
-
-  cron/                             # Proactive behavior configs
-    heartbeat.yaml
-    morning-briefing.yaml
-    standing-orders.yaml
-
-  docker/                           # Container config
+  mechanics/                         # Mechanic prompts and evaluation criteria
+  skills/                            # Leo skills in markdown
+  sops/                              # SOP templates in YAML
+  orchestrator/                      # LangGraph code for future structured workflows
+  audit/                             # Audit logging + secret patterns
+  security/                          # Security docs and guards
+  cron/                              # Scheduled behavior configs
+  docker/
     config/
-      workspace/                    # Leo's OpenClaw workspace files
-        SOUL.md                     # Core personality and values
-        IDENTITY.md                 # Who Leo is
-        USER.md                     # Travis's preferences
-        AGENTS.md                   # Agent team context
-        TOOLS.md                    # Available tools
-        CRON.md                     # Scheduled behaviors
-      openclaw.json                 # OpenClaw instance config
-      auth-profiles.json            # Auth configuration
-      slack-devbot-manifest.yaml    # Slack app manifest
-    leo-icon-final.png
-    provision.sh
-    setup.sh
+      workspace/                     # Leo workspace markdown files
+      slack-devbot-manifest.yaml
 
-  scripts/                          # Utility scripts (pre-push hooks, etc.)
-  tests/                            # Test suite (5 test files)
-    fixtures/                       # Test fixtures (BlackTie campaign, etc.)
+  docs/
+    claude-agent-sdk-deep-dive.md
+
+  scripts/
+  tests/
 ```
 
-**Key structural decisions:**
-- `platform/` was eliminated (Python stdlib collision). Its children are now top-level.
-- `workspaces/` was removed. Customer config is a deployment concern — OpenClaw workspace files per container, not tracked in this repo.
-- SOPs are platform-level templates. The same SOP works for any customer; workspace context customizes output at deploy time.
+**Removed in the Agent SDK pivot:**
+- `worker/hooks/`
+- `pipeline/response_parser.py`
+- `pipeline/webhook_server.py`
+- `docker/.devcontainer/`
+- `docker/config/openclaw.json`
+- `docker/config/auth-profiles.json`
+- `security/exec-approvals.json`
 
 ---
 
 ## Architecture: The Self-Improving Loop
 
-This is the core of the system. Understand this and you understand everything.
-
+```text
+Slack message or CLI task
+    |
+    v
+[Pipeline Orchestrator on Host]
+    |
+    v
+[Worker Container]
+    python:3.13-slim
+    Claude Agent SDK via ClaudeSDKClient
+    worker/entrypoint.py
+    plain-text response written to /tmp/latest-response.txt
+    completion signaled by /tmp/session-complete
+    |
+    v
+[Changeset Extraction on Host]
+    git diff
+    docker diff
+    container logs
+    output artifacts
+    |
+    v
+[Mechanic on Host]
+    Claude Agent SDK via query()
+    reviews the changeset
+    returns approval or rejection
+    |
+    v
+[GitHub PR]
+    approved changes only
+    |
+    v
+[Human Review]
+    merge or reject
 ```
-Slack message (or CLI)
-    |
-    v
-[Orchestrator]  ---- pure Python, no AI, just plumbing
-    |
-    v
-[Worker Container]  ---- fresh Docker from tip of main
-    |                     Leo runs freely: installs tools, creates skills, modifies config
-    |                     Config mounted READ-ONLY (cannot mutate live config)
-    v
-[Changeset Extraction]  ---- mechanical, not self-reported
-    |                         git diff (code/config changes)
-    |                         docker diff (environment changes)
-    |                         session transcript + container logs
-    v
-[Mechanic Container]  ---- separate OpenClaw instance, code-reviewer persona
-    |                       Evaluates: Meaningful? Correct? Safe? Minimal? Reproducible?
-    |                       Agent transcript is additional signal, never primary truth
-    v
-[GitHub PR]  ---- every change, no matter how small, gets a PR
-    |              Mechanic evaluation = PR body
-    v
-[Human Review]  ---- Travis reviews via Slack notification or GitHub
-    |
-    +--> Approve + Merge --> new base image --> next session improved
-    |
-    +--> Reject --> discard --> no regression
-```
 
-**The ratchet rule:** Main = known good. The system can only move forward. Rejected changes are thrown away. If a merge causes regression, git revert.
+The important change is that the Worker is still isolated in Docker, but the Mechanic is no longer another container. The host process runs the Mechanic directly through the Agent SDK. Completion is no longer driven by webhook callbacks; the host polls for the sentinel file at `/tmp/session-complete`.
 
 ### Key Principles
 
-1. **Leo starts bare.** Just SOUL.md, IDENTITY.md, USER.md, AGENTS.md. No pre-loaded skills. Leo learns on the job.
-2. **Sandbox per session.** Each message triggers a fresh container built from tip of main.
-3. **Two-layer mechanical capture.** `git diff` for code/config, `docker diff` for environment. The system observes from the outside — no agent self-reporting as primary truth.
-4. **Mechanic evaluates.** Separate persona (safety, correctness, minimalism). Receives the full changeset bundle.
-5. **Every change is a PR.** No exceptions. No direct mutations.
-6. **Human reviews.** Travis is the final gate.
+1. **Fresh Worker sandbox.** The Worker starts from the current repo state inside a Docker image built from `worker/Dockerfile`.
+2. **Mechanical evidence first.** The system trusts diffs, logs, and copied artifacts over agent self-reporting.
+3. **Mechanic is separate from the Worker.** Review happens outside the Worker sandbox on the host.
+4. **Responses are plain text.** The Worker persists text to `/tmp/latest-response.txt`; the old OpenClaw JSON response format is gone.
+5. **Every accepted change becomes a PR.** No direct writes to `main`.
+6. **Human review is mandatory.** Travis is still the final decision-maker.
 
-### The Orchestrator
+---
 
-- Pure Python script running on the host
-- Coordinates Docker containers: spin up worker, wait, extract changeset, spin up mechanic, wait, create PR
-- NO AI reasoning — just docker commands, file copying, status reporting
-- Triggered by Slack messages (or CLI for the prototype)
+## Agent SDK Architecture
 
-### Dockerfile-as-Code
+The platform now uses a split Agent SDK pattern:
 
-The entire agent environment is a git artifact:
-- Dockerfile + config + skills + requirements — all in this repo
-- A skill that needs ffmpeg produces a PR with both the skill file AND the Dockerfile/requirements change
-- CI rebuilds the base image on merge to main
+- **Worker:** runs in Docker, uses `ClaudeSDKClient`, and owns the mutable sandbox where Leo edits files and uses tools.
+- **Mechanic:** runs on the host, uses `query()`, and reviews the extracted changeset without sharing the Worker's container.
+
+In the Worker, `worker/entrypoint.py` builds the system prompt from the workspace markdown files, starts the SDK client, and installs Python hook callbacks for:
+
+- pre-tool logging
+- post-tool logging
+- stop/completion handling
+
+Those callbacks replace the old `worker/hooks/` directory and webhook-based lifecycle. The Worker writes:
+
+- `/tmp/latest-response.txt` for the latest plain-text response
+- `/tmp/tool-log.jsonl` for the JSONL audit trail
+- `/tmp/usage.json` for token and cost tracking
+- `/tmp/session-complete` as the completion sentinel
+
+Authentication now uses `CLAUDE_CODE_OAUTH_TOKEN`. Inside the Worker container, permissions are handled with Agent SDK `permission_mode="bypassPermissions"` rather than an external approvals JSON file. The SDK also gives the system a clean path to structured output when a task benefits from schema-constrained results.
 
 ---
 
@@ -157,141 +153,65 @@ The entire agent environment is a git artifact:
 
 | Mechanic | Role | Trigger | Status |
 |----------|------|---------|--------|
-| **A (Worker Analysis)** | Evaluates conversation quality + changeset after each Leo session | After each worker turn | Prompt written, needs runtime integration |
-| **B (Workflow Analysis)** | Evaluates structured workflow step-by-step performance | After workflow executions | **Deferred** — no workflows exist yet |
-| **C (The Scout)** | Scans Twitter/HN/Product Hunt for new tools, proposes experiments | Daily cron | Prompt written |
-| **Meta-Mechanic** | Reviews the mechanics themselves | Weekly | **Deferred** |
+| **A (Worker Analysis)** | Reviews Worker changesets and session output | After each Worker run | Implemented on host via Agent SDK |
+| **B (Workflow Analysis)** | Reviews structured workflow execution quality | After workflow runs | Deferred |
+| **C (The Scout)** | Proposes experiments and tooling research | Daily cron | Prompt exists, runtime not wired |
+| **Meta-Mechanic** | Reviews the mechanics themselves | Weekly | Deferred |
 
-**Golden rule:** No change without evidence. Default is always: no change.
-
----
-
-## ClawVault Memory System
-
-Replaces the simple MEMORY.md approach. Designed but not yet built.
-
-- **Git-backed markdown files** with frontmatter, wikilinks, hybrid search (BM25 + semantic embeddings)
-- **Vault structure:** `tools/`, `repos/`, `experiments/`, `concepts/`, `decisions/`, `lessons/`, `daily-research/`
-- **Session lifecycle:** `clawvault wake` loads prior knowledge, `clawvault sleep` commits to branch
-- **Memory changes go through the PR flow** — agent cannot corrupt its knowledge base without review
-- The Mechanic can propose vault organization changes, but primarily the agent decides its own structure
-
----
-
-## One Agent, Built Well
-
-- **Leo** is the single customer-facing agent. Handles research, building, project management.
-- Specialization happens at the **skill level**, not the agent level.
-- Perplexity Computer is a **tool Leo dispatches to**, not a separate agent.
-- The Mechanic is **invisible infrastructure**, not a team member.
-
----
-
-## LangGraph: Deferred
-
-- NOT used for the improvement loop (the Orchestrator handles that — it is a linear pipeline, not a state machine)
-- Reserved for structured multi-step workflows with approval gates (ad campaigns, etc.) — built later when proven SOPs need hard state management
-- The existing `orchestrator/` code (graphs, nodes) is the foundation for this future use
+**Golden rule:** no change without evidence. The default outcome is rejection unless the changeset is clearly useful, correct, and safe.
 
 ---
 
 ## What Exists Today
 
-### Built and Working
-- 7 OpenClaw skills in `skills/` (reference material for what good skills look like)
-- 3 SOPs in `sops/` (ad-campaign, landing-page, email-sequence) + template
-- LangGraph orchestrator with Claude integration in `orchestrator/` (for future workflow use)
-- Mechanic prompts and evaluation criteria in `mechanics/`
-- Audit logging + secret scanning in `audit/`
-- Security: exec-approvals, self-modification guard, secret injection docs in `security/`
-- Cron configs: heartbeat, morning briefing, standing orders in `cron/`
-- Leo's workspace files deployed in `docker/config/workspace/`
-- OpenClaw self-hosted in devcontainer on Mac Mini (OrbStack)
-- Doppler secrets management configured (project: chat-force, config: dev)
-- Slack app "Leo" connected via socket mode
-- Gateway CLI verified: `docker exec $CONTAINER_ID openclaw agent --agent main --message "..." --json`
-- 9-reviewer code review completed (7 Claude + Codex-mini + GPT-5.4)
-- Test suite in `tests/` (5 test files)
+### Built
 
-### Partially Complete (from review/fix sprint)
-- Critical bug fixes (approval gates, DAG wiring) — in progress
-- Context truncation, audit integration, security enforcement — in progress
-- Skills loading, agent dispatch, dead code cleanup — in progress
-- REQUIREMENTS.md accuracy update — todo
-- Full test suite re-validation — todo
+- Worker image in [worker/Dockerfile](/Users/travis/chat-force/worker/Dockerfile) using `python:3.13-slim` and `claude-agent-sdk`
+- Worker runtime in [worker/entrypoint.py](/Users/travis/chat-force/worker/entrypoint.py) with Python callbacks, plain-text response capture, sentinel completion, tool log, and usage tracking
+- Host-side pipeline in [pipeline/main.py](/Users/travis/chat-force/pipeline/main.py)
+- Worker lifecycle management and sentinel polling in [pipeline/worker_manager.py](/Users/travis/chat-force/pipeline/worker_manager.py)
+- Host-side Mechanic evaluation via Agent SDK `query()` in [pipeline/mechanic_manager.py](/Users/travis/chat-force/pipeline/mechanic_manager.py)
+- Changeset extraction, PR creation, Slack notifications, and session management in `pipeline/`
+- Skills in `skills/`, SOP templates in `sops/`, and Mechanic prompts in `mechanics/`
+- Audit logging and secret-pattern support in `audit/`
+- Test suite in `tests/`
 
----
+### Current Reality
 
-## What to Build Next: Prototype Sprint
-
-**Goal:** Build the self-improving loop end-to-end, CLI-triggered. This is from Linear issues TRA-219, TRA-220, TRA-221.
-
-### Sprint Deliverables (in order)
-
-1. **Orchestrator script** — Python, CLI-triggered. Takes a message, runs the full loop.
-   - `python orchestrator.py --message "Research competitor pricing"`
-   - No AI in the orchestrator. Pure plumbing: docker commands, file ops, status reporting.
-
-2. **Worker Dockerfile** — Built from this config repo.
-   - Install OpenClaw + dependencies
-   - Mount config READ-ONLY
-   - Leo starts bare (just workspace files), runs freely inside the sandbox
-
-3. **afterTurn webhook** — Completion signaling from the worker container.
-   - How the orchestrator knows Leo is done
-
-4. **Changeset extraction** — Run after worker finishes.
-   - `git diff` inside the container for code/config changes
-   - `docker diff` on the container for environment changes
-   - Extract session transcript + container logs
-   - Bundle everything into a changeset directory
-
-5. **Mechanic OpenClaw configuration** — Separate instance, code-reviewer persona.
-   - Receives the full changeset bundle
-   - Outputs a structured verdict: approve/reject + evaluation + filtered changes
-
-6. **GitHub PR creation** — From approved mechanic verdicts.
-   - PR body = mechanic evaluation
-   - PR diff = filtered changes from the mechanic's approval
-   - Slack notification to Travis with PR link
-
-7. **End-to-end test** — CLI message in, PR out.
-   - `./orchestrator.py --message "Create a skill for summarizing articles"` should produce a GitHub PR
-
-### Key Linear Issues
-- **TRA-219**: Sandbox architecture (worker container, changeset extraction)
-- **TRA-220**: ClawVault + research system (memory, Scout mechanic)
-- **TRA-221**: Dockerfile-as-Code (environment as git artifact, CI rebuild)
+- The OpenClaw runtime and its config files are gone.
+- The Mechanic does not run in Docker anymore.
+- Webhook completion flow is gone; sentinel polling is the runtime contract now.
+- LangGraph still exists in `orchestrator/`, but it is for future structured workflows, not the core self-improvement loop.
 
 ---
 
 ## Technology Stack
 
 | Component | Technology | Notes |
-|-----------|-----------|-------|
-| Primary LLM | Claude Opus 4.6 | Via Anthropic auth token in Doppler |
-| Agent Runtime | OpenClaw (KiloClaw, self-hosted) | Devcontainer on Mac Mini, OrbStack |
-| Secrets | Doppler | Project: chat-force, Config: dev |
-| Interface | Slack (socket mode) | Leo bot app |
-| Container | Docker (OrbStack) | One container per session |
-| Source Control | GitHub (private) | chat-force repo |
-| Python | 3.13, managed with uv | `uv run --python 3.13 --with <deps>` |
-| Future Workflows | LangGraph | Local, same container — no cloud needed yet |
+|-----------|------------|-------|
+| Primary agent runtime | Claude Agent SDK | Installed with `pip install claude-agent-sdk` |
+| Worker environment | Docker + `python:3.13-slim` | One Worker container per session/run |
+| Worker interface | `ClaudeSDKClient` | Long-lived SDK client inside the container |
+| Mechanic interface | Agent SDK `query()` | Runs directly on the host |
+| Auth | `CLAUDE_CODE_OAUTH_TOKEN` | Replaces `ANTHROPIC_AUTH_TOKEN` |
+| Secrets | Doppler | Environment injection, never hardcoded |
+| Interface | Slack + CLI | Slack for user interaction, CLI for direct pipeline runs |
+| Source control | GitHub | Approved changes become PRs |
+| Python tooling | Python 3.13 + `uv` | Preferred local execution path |
+| Future workflows | LangGraph | Reserved for structured SOP execution |
 
 ---
 
 ## Safety Rules
 
-These are non-negotiable. Violating any of these is a session-ending mistake.
-
-1. **DO NOT commit or push to main.** Use feature branches. Always.
-2. **Every change is a PR.** No direct mutations to main.
-3. **Main = known good.** If something breaks on main, git revert. Never fix forward on main.
-4. **Test via gateway CLI** — `openclaw agent --agent main --message "..."`, not Slack.
-5. **All secrets in Doppler.** Never hardcode. Never log. Never pass to prompts.
-6. **All config in git.** Source-controlled, auditable.
-7. **DO NOT deploy anything externally** without explicit approval.
-8. **If something goes wrong, stop and contain.** Don't try to fix forward on shared resources.
+1. **Do not commit or push to `main`.** Use branches and PRs.
+2. **Every accepted change must be reviewable.** The pipeline exists to produce auditable diffs.
+3. **Main is the known-good line.** Revert regressions; do not patch around them on `main`.
+4. **Test the current pipeline, not the dead gateway path.** Use the Python pipeline entrypoint and the test suite; do not rely on old `openclaw agent ...` commands.
+5. **Keep secrets out of code, logs, and prompts.** Use Doppler-provided env vars such as `CLAUDE_CODE_OAUTH_TOKEN`, `GITHUB_TOKEN`, and `SLACK_BOT_TOKEN`.
+6. **Treat Worker permissions as container-scoped.** The Worker uses Agent SDK `bypassPermissions` inside Docker; do not reintroduce host-level approval hacks.
+7. **Do not deploy external side effects without explicit approval.**
+8. **If containment is unclear, stop.** Preserve the current state, collect evidence, and avoid improvising on shared resources.
 
 ---
 
@@ -299,21 +219,24 @@ These are non-negotiable. Violating any of these is a session-ending mistake.
 
 | File | Purpose |
 |------|---------|
-| `Digital-Workforce-Platform-FINAL-v3.1.md` | Original product spec — vision, service tiers, pricing |
-| `REQUIREMENTS.md` | Requirements tracker with completion status |
-| `JOURNAL.md` | Engineering decisions, sprint history, current status |
-| `ORCHESTRATOR-PROMPT.md` | Build orchestrator operating instructions |
-| `mechanics/evaluation-criteria.yaml` | What the Mechanic scores and how |
-| `sops/sop-template.yaml` | How to create new SOPs |
+| `Digital-Workforce-Platform-FINAL-v3.1.md` | Original product and business spec |
+| `REQUIREMENTS.md` | Requirements tracker |
+| `JOURNAL.md` | Engineering history and decisions |
+| `ORCHESTRATOR-PROMPT.md` | Build orchestrator guidance |
+| `mechanics/evaluation-criteria.yaml` | Mechanic scoring rules |
+| `worker/entrypoint.py` | Core Worker Agent SDK runtime |
+| `pipeline/main.py` | Self-improving loop entrypoint |
 
 ---
 
 ## Conventions
 
-- **Python:** Use `uv run --python 3.13 --with <deps>` for execution
-- **Branches:** Feature branches off main (e.g., `sprint/phase0-buildout`, `docs/project-synthesis`)
-- **Testing:** `tests/` directory, pytest-based. Test fixtures in `tests/fixtures/`
-- **Skills format:** Markdown files in `skills/` — OpenClaw skill format
-- **SOP format:** YAML files in `sops/` — steps, approval gates, agent assignments
-- **Workspace files:** Markdown in `docker/config/workspace/` — mounted into OpenClaw container
-- **Travis's preferences:** Progressive disclosure, visual diagrams, one question at a time, quality over speed
+- **Python:** use Python 3.13. Local commands should prefer `uv run --python 3.13 ...`.
+- **Pipeline entrypoint:** run the loop with `python -m pipeline.main --task "..."` or the equivalent `uv run` form.
+- **Worker completion:** completion is signaled by `/tmp/session-complete`, not a webhook.
+- **Worker responses:** the canonical response artifact is plain text in `/tmp/latest-response.txt`.
+- **Audit artifacts:** tool usage is recorded in `/tmp/tool-log.jsonl`; usage and cost are recorded in `/tmp/usage.json`.
+- **Skills:** markdown files in `skills/`.
+- **SOPs:** YAML files in `sops/`.
+- **Workspace files:** markdown files in `docker/config/workspace/`, loaded into the Worker system prompt.
+- **Automation branches:** generated PR branches use the `agent-sdk/auto/...` prefix.
