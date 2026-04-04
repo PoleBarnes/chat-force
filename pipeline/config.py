@@ -27,7 +27,7 @@ class PipelineConfig:
 
     # Secrets (from Doppler -- never hardcode values here)
     github_token_env: str = "GITHUB_TOKEN"
-    claude_code_token_env: str = "CLAUDE_CODE_OAUTH_TOKEN"
+    claude_code_token_env: str = "ANTHROPIC_API_KEY"
     slack_token_env: str = "SLACK_BOT_TOKEN"
     max_budget_usd: float = 5.0
     max_turns: int = 50

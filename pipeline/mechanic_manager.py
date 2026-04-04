@@ -40,18 +40,18 @@ class MechanicManager:
 
     def _run_query(self, prompt: str, changeset_json: str) -> dict:
         """Run a single Mechanic evaluation turn and parse the JSON verdict."""
-        from claude_agent_sdk import query
+        from claude_agent_sdk import query, ClaudeAgentOptions
 
         async def _collect_result_text() -> str:
             result_text = ""
             assistant_text_parts: list[str] = []
 
-            async for message in query(
-                prompt=prompt,
+            opts = ClaudeAgentOptions(
                 system_prompt=_DEFAULT_MECHANIC_SYSTEM_PROMPT,
                 max_turns=1,
                 permission_mode="plan",
-            ):
+            )
+            async for message in query(prompt=prompt, options=opts):
                 message_type = type(message).__name__
 
                 if message_type == "AssistantMessage":

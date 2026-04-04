@@ -53,7 +53,7 @@ class TestPipelineConfig:
     def test_agent_sdk_defaults(self):
         """Config should have Agent SDK-specific defaults."""
         config = PipelineConfig()
-        assert config.claude_code_token_env == "CLAUDE_CODE_OAUTH_TOKEN"
+        assert config.claude_code_token_env == "ANTHROPIC_API_KEY"
         assert config.max_budget_usd == 5.0
         assert config.max_turns == 50
         assert config.permission_mode == "bypassPermissions"
@@ -79,7 +79,7 @@ class TestPipelineConfig:
         """Config should use claude_code_token_env, not anthropic_token_env."""
         config = PipelineConfig()
         assert not hasattr(config, "anthropic_token_env")
-        assert config.claude_code_token_env == "CLAUDE_CODE_OAUTH_TOKEN"
+        assert config.claude_code_token_env == "ANTHROPIC_API_KEY"
 
     def test_post_init_creates_output_dir(self, tmp_path):
         """__post_init__ should create output_base if it does not exist."""
