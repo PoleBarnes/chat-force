@@ -264,6 +264,55 @@ class TestChangesetExtractor:
         assert saved["run_id"] == "test-run-003"
 
 
+class TestChangesetExtractorParsing:
+    """Test tool_log and usage parsing in changeset bundle."""
+
+    def test_parse_tool_log_valid_jsonl(self, tmp_path):
+        """_parse_tool_log should parse JSONL file into list of dicts."""
+        from pipeline.changeset_extractor import ChangesetExtractor
+        config = PipelineConfig(output_base=str(tmp_path))
+        ext = ChangesetExtractor(config, "run-1")
+
+        log_path = tmp_path / "tool-log.jsonl"
+        log_path.write_text('{"event":"PreToolUse","tool":"Bash"}\n{"event":"PostToolUse","tool":"Bash"}\n')
+
+        result = ext._parse_tool_log(str(log_path))
+        assert len(result) == 2
+        assert result[0]["event"] == "PreToolUse"
+        assert result[1]["event"] == "PostToolUse"
+
+    def test_parse_tool_log_missing_file(self, tmp_path):
+        """_parse_tool_log should return [] when file doesn't exist."""
+        from pipeline.changeset_extractor import ChangesetExtractor
+        config = PipelineConfig(output_base=str(tmp_path))
+        ext = ChangesetExtractor(config, "run-1")
+
+        assert ext._parse_tool_log("/nonexistent/path") == []
+        assert ext._parse_tool_log(None) == []
+
+    def test_parse_usage_valid_json(self, tmp_path):
+        """_parse_usage should parse JSON file into dict."""
+        from pipeline.changeset_extractor import ChangesetExtractor
+        config = PipelineConfig(output_base=str(tmp_path))
+        ext = ChangesetExtractor(config, "run-1")
+
+        usage_path = tmp_path / "usage.json"
+        usage_path.write_text('{"input_tokens": 1000, "output_tokens": 500, "total_cost_usd": 0.03}')
+
+        result = ext._parse_usage(str(usage_path))
+        assert result["input_tokens"] == 1000
+        assert result["total_cost_usd"] == 0.03
+
+    def test_parse_usage_missing_file(self, tmp_path):
+        """_parse_usage should return {} when file doesn't exist."""
+        from pipeline.changeset_extractor import ChangesetExtractor
+        config = PipelineConfig(output_base=str(tmp_path))
+        ext = ChangesetExtractor(config, "run-1")
+
+        assert ext._parse_usage("/nonexistent/path") == {}
+        assert ext._parse_usage(None) == {}
+
+
 # =========================================================================
 # MechanicManager tests
 # =========================================================================

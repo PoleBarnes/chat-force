@@ -81,6 +81,8 @@ class ChangesetExtractor:
         bundle["docker_changes"] = self._extract_docker_changes(container)
         bundle["telemetry"] = self._extract_telemetry(container)
         bundle["agent_logs"] = self._extract_agent_logs(container, container_id)
+        bundle["tool_log"] = self._parse_tool_log(bundle["agent_logs"].get("tool_log_path"))
+        bundle["usage"] = self._parse_usage(bundle["agent_logs"].get("usage_path"))
         bundle["output_files"] = self._extract_output_files(container, container_id)
         bundle["bundle_path"] = self.run_dir
 
@@ -244,6 +246,28 @@ class ChangesetExtractor:
             result["response_path"] = response_path
 
         return result
+
+    def _parse_tool_log(self, path: str | None) -> list[dict]:
+        """Parse tool-log.jsonl from disk into a list of dicts."""
+        if not path or not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r") as f:
+                return [json.loads(line) for line in f if line.strip()]
+        except (OSError, json.JSONDecodeError):
+            log.warning("Could not parse tool log at %s", path)
+            return []
+
+    def _parse_usage(self, path: str | None) -> dict:
+        """Parse usage.json from disk into a dict."""
+        if not path or not os.path.exists(path):
+            return {}
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            log.warning("Could not parse usage at %s", path)
+            return {}
 
     # -- Layer 5: Output files (binaries, rendered artifacts) -----------------
 
