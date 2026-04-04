@@ -5,13 +5,12 @@ import logging
 import os
 import subprocess
 import tempfile
+import time
 
 import docker
 from docker.errors import ImageNotFound, NotFound
 
 from pipeline.config import PipelineConfig
-from pipeline.response_parser import parse_response
-from pipeline.webhook_server import WebhookServer
 
 log = logging.getLogger(__name__)
 
@@ -19,13 +18,11 @@ log = logging.getLogger(__name__)
 class WorkerManager:
     """Starts, monitors, and cleans up the Worker container."""
 
-    def __init__(self, config: PipelineConfig, run_id: str, webhook: WebhookServer | None = None):
+    def __init__(self, config: PipelineConfig, run_id: str):
         self.config = config
         self.run_id = run_id
         self._client = docker.from_env()
         self._container = None
-        self._webhook = webhook or WebhookServer(config.webhook_host, config.webhook_port)
-        self._owns_webhook = webhook is None  # only start/stop if we created it
 
     # -- public API -----------------------------------------------------------
 
@@ -33,18 +30,10 @@ class WorkerManager:
         """Launch the Worker container. Returns the container ID."""
         self._ensure_image()
 
-        # Start webhook server if we own it (CLI mode). In session mode,
-        # the session manager owns the shared webhook server.
-        if self._owns_webhook:
-            self._webhook.start()
-
-        webhook_base = f"http://host.docker.internal:{self.config.webhook_port}"
-
         env = {
             "TASK_INSTRUCTION": task,
-            "ORCHESTRATOR_WEBHOOK_URL": webhook_base,
-            "ANTHROPIC_AUTH_TOKEN": os.environ.get(
-                self.config.anthropic_token_env, ""
+            self.config.claude_code_token_env: os.environ.get(
+                self.config.claude_code_token_env, ""
             ),
         }
 
@@ -58,35 +47,43 @@ class WorkerManager:
 
         container_id = self._container.id
 
-        # Register this container for per-container completion tracking.
-        self._webhook.register(container_id)
-
         log.info("Worker container started: %s (%s)", self._container.name, container_id[:12])
         return container_id
 
     def wait_for_completion(self) -> None:
-        """Block until the worker signals completion, exits, or times out."""
-        timeout = self.config.worker_timeout
-        container_id = self._container.id if self._container else None
-        signaled = self._webhook.wait_for_completion(container_id=container_id, timeout=timeout)
+        """Block until the worker creates the completion sentinel or times out."""
+        if self._container is None:
+            raise RuntimeError("Worker container not running")
 
-        if signaled:
-            log.info("Worker signaled task-complete via webhook")
-            return
+        deadline = time.monotonic() + self.config.worker_timeout
+        last_status = "unknown"
 
-        self._container.reload()
-        status = self._container.status
+        while time.monotonic() < deadline:
+            result = subprocess.run(
+                ["docker", "exec", self._container.id, "test", "-f", "/tmp/session-complete"],
+                check=False,
+                capture_output=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                log.info("Worker completion sentinel detected")
+                return
 
-        if status in ("exited", "dead"):
-            exit_code = self._container.attrs["State"]["ExitCode"]
-            log.info("Worker container exited with code %d", exit_code)
-            if exit_code != 0:
-                logs_tail = self._container.logs(tail=50).decode(errors="replace")
-                log.warning("Worker non-zero exit. Last logs:\n%s", logs_tail)
-            return
+            self._container.reload()
+            last_status = self._container.status
+            if last_status in ("exited", "dead"):
+                exit_code = self._container.attrs["State"]["ExitCode"]
+                log.warning(
+                    "Worker container exited before completion sentinel appeared (code %d)",
+                    exit_code,
+                )
+                break
+
+            time.sleep(2)
 
         raise TimeoutError(
-            f"Worker did not complete within {timeout}s (container status: {status})"
+            f"Worker did not complete within {self.config.worker_timeout}s "
+            f"(container status: {last_status})"
         )
 
     def send_message(self, message: str) -> None:
@@ -104,10 +101,6 @@ class WorkerManager:
             raise RuntimeError(
                 f"Worker container is {self._container.status}, cannot send message"
             )
-
-        # Reset BEFORE writing the file so a fast container response isn't
-        # lost (the event must be clear before the container can see the message).
-        self._webhook.reset(self._container.id)
 
         # Write message to a temp file, then docker cp into the container
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
@@ -138,28 +131,74 @@ class WorkerManager:
     def get_response(self) -> str:
         """Retrieve the Worker's latest response text.
 
-        Copies /tmp/latest-response.json from the container, parses the
-        OpenClaw JSON output, and returns the extracted text.
+        Copies /tmp/latest-response.txt from the container and returns it as plain text.
         """
         if self._container is None:
             raise RuntimeError("Worker container not running")
 
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".txt", delete=False) as f:
             tmp_path = f.name
 
         try:
             subprocess.run(
-                ["docker", "cp", f"{self._container.id}:/tmp/latest-response.json", tmp_path],
+                ["docker", "cp", f"{self._container.id}:/tmp/latest-response.txt", tmp_path],
                 check=True,
                 capture_output=True,
                 timeout=10,
             )
             with open(tmp_path, "r") as f:
-                raw_json = f.read()
-            return parse_response(raw_json)
-        except subprocess.CalledProcessError:
-            log.warning("Could not copy latest-response.json from Worker")
+                return f.read()
+        except (OSError, subprocess.CalledProcessError):
+            log.warning("Could not copy latest-response.txt from Worker")
             return ""
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    def get_tool_log(self) -> list[dict]:
+        """Retrieve structured tool-call logs from the Worker."""
+        if self._container is None:
+            raise RuntimeError("Worker container not running")
+
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".jsonl", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            subprocess.run(
+                ["docker", "cp", f"{self._container.id}:/tmp/tool-log.jsonl", tmp_path],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+            with open(tmp_path, "r") as f:
+                return [json.loads(line) for line in f if line.strip()]
+        except (OSError, json.JSONDecodeError, subprocess.CalledProcessError):
+            log.warning("Could not copy tool-log.jsonl from Worker")
+            return []
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    def get_usage(self) -> dict:
+        """Retrieve usage metadata from the Worker."""
+        if self._container is None:
+            raise RuntimeError("Worker container not running")
+
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            subprocess.run(
+                ["docker", "cp", f"{self._container.id}:/tmp/usage.json", tmp_path],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+            with open(tmp_path, "r") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError, subprocess.CalledProcessError):
+            log.warning("Could not copy usage.json from Worker")
+            return {}
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
@@ -181,16 +220,7 @@ class WorkerManager:
         return self._container.logs().decode(errors="replace")
 
     def cleanup(self) -> None:
-        """Remove the worker container (and webhook server if we own it)."""
-        if self._container is not None:
-            # Unregister from webhook tracking before removing the container.
-            try:
-                self._webhook.unregister(self._container.id)
-            except Exception:
-                log.debug("Could not unregister container from webhook", exc_info=True)
-
-        if self._owns_webhook:
-            self._webhook.stop()
+        """Remove the worker container."""
         if self._container is None:
             return
         try:

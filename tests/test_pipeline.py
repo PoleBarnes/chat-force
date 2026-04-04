@@ -1983,7 +1983,7 @@ class TestFeedbackHandler:
 
 
 class TestWorkerManager:
-    """Test WorkerManager methods with mocked Docker client."""
+    """Test WorkerManager methods with mocked Docker client (Agent SDK)."""
 
     @pytest.fixture
     def config(self, tmp_path):
@@ -2011,35 +2011,14 @@ class TestWorkerManager:
                 "container": container,
             }
 
-    def test_send_message_resets_webhook_before_writing(self, config, mock_docker):
-        """send_message should reset the webhook BEFORE docker cp."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
-        wm._container = mock_docker["container"]
-
-        call_order = []
-        webhook.reset.side_effect = lambda cid: call_order.append("reset")
-
-        with patch("pipeline.worker_manager.subprocess") as mock_sub:
-            mock_sub.run.side_effect = lambda *a, **kw: call_order.append("docker_cp")
-            with patch("pipeline.worker_manager.tempfile") as mock_tmp:
-                mock_file = MagicMock()
-                mock_file.__enter__ = MagicMock(return_value=mock_file)
-                mock_file.__exit__ = MagicMock(return_value=False)
-                mock_file.name = "/tmp/fake-msg.txt"
-                mock_tmp.NamedTemporaryFile.return_value = mock_file
-
-                with patch("pipeline.worker_manager.os.unlink"):
-                    wm.send_message("test message")
-
-        assert call_order.index("reset") < call_order.index("docker_cp")
+    def test_init_no_webhook_param(self, config, mock_docker):
+        """WorkerManager should NOT accept a webhook parameter."""
+        wm = WorkerManager(config, "test-run")
+        assert not hasattr(wm, "_webhook")
 
     def test_send_message_chmods_file_after_docker_cp(self, config, mock_docker):
-        """send_message should chmod 644 the file AFTER docker cp so a non-root
-        container process can read it. Regression test for the bug where docker
-        cp wrote the file as root and the node user got Permission denied."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+        """send_message should chmod 644 after docker cp (regression test)."""
+        wm = WorkerManager(config, "test-run")
         wm._container = mock_docker["container"]
         container_id = mock_docker["container"].id
 
@@ -2064,48 +2043,20 @@ class TestWorkerManager:
                 with patch("pipeline.worker_manager.os.unlink"):
                     wm.send_message("hello from orchestrator")
 
-        # chmod must be called
-        assert "docker_exec_chmod" in call_order, (
-            "send_message must call docker exec chmod after docker cp"
-        )
-
-        # chmod must come AFTER cp, not before
-        assert call_order.index("docker_cp") < call_order.index("docker_exec_chmod"), (
-            f"chmod must happen after cp, got order: {call_order}"
-        )
-
-        # Verify the exact chmod command args
-        chmod_call = [
-            c for c in mock_sub.run.call_args_list
-            if c[0][0][1] == "exec"
-        ][0]
-        assert chmod_call[0][0] == [
-            "docker", "exec", container_id, "chmod", "644", "/tmp/next-message.txt"
-        ]
-
-        # chmod uses check=False so failures don't crash the pipeline
-        assert chmod_call[1].get("check") is False, (
-            "chmod call must use check=False (best-effort)"
-        )
+        assert "docker_exec_chmod" in call_order
+        assert call_order.index("docker_cp") < call_order.index("docker_exec_chmod")
 
     @patch("pipeline.worker_manager.subprocess")
-    def test_get_response_reads_and_parses(self, mock_sub, config, mock_docker):
-        """get_response should docker cp the file and parse the JSON."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+    def test_get_response_reads_plain_text(self, mock_sub, config, mock_docker):
+        """get_response should read plain text from latest-response.txt (not JSON)."""
+        wm = WorkerManager(config, "test-run")
         wm._container = mock_docker["container"]
 
-        response_json = json.dumps({
-            "payloads": [{"text": "Hello from worker"}],
-            "meta": {},
-        })
-
         def fake_cp(*args, **kwargs):
-            # Write to the temp file that get_response will read
             cmd_args = args[0]
-            dest = cmd_args[-1]  # last arg is destination path
+            dest = cmd_args[-1]
             with open(dest, "w") as f:
-                f.write(response_json)
+                f.write("Hello from worker")
 
         mock_sub.run.side_effect = fake_cp
 
@@ -2119,88 +2070,157 @@ class TestWorkerManager:
         mock_sub.CalledProcessError = real_subprocess.CalledProcessError
         mock_sub.run.side_effect = real_subprocess.CalledProcessError(1, "docker cp")
 
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+        wm = WorkerManager(config, "test-run")
         wm._container = mock_docker["container"]
 
         result = wm.get_response()
         assert result == ""
 
+    @patch("pipeline.worker_manager.subprocess")
+    def test_get_tool_log_reads_jsonl(self, mock_sub, config, mock_docker):
+        """get_tool_log should read /tmp/tool-log.jsonl from the container."""
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+
+        tool_log_content = '{"event":"PreToolUse","tool_name":"Bash"}\n{"event":"PostToolUse","tool_name":"Bash"}\n'
+
+        def fake_cp(*args, **kwargs):
+            cmd_args = args[0]
+            dest = cmd_args[-1]
+            with open(dest, "w") as f:
+                f.write(tool_log_content)
+
+        mock_sub.run.side_effect = fake_cp
+
+        result = wm.get_tool_log()
+        assert len(result) == 2
+        assert result[0]["event"] == "PreToolUse"
+        assert result[1]["event"] == "PostToolUse"
+
+    @patch("pipeline.worker_manager.subprocess")
+    def test_get_tool_log_returns_empty_on_failure(self, mock_sub, config, mock_docker):
+        """get_tool_log should return empty list if docker cp fails."""
+        import subprocess as real_subprocess
+        mock_sub.CalledProcessError = real_subprocess.CalledProcessError
+        mock_sub.run.side_effect = real_subprocess.CalledProcessError(1, "docker cp")
+
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+
+        result = wm.get_tool_log()
+        assert result == []
+
+    @patch("pipeline.worker_manager.subprocess")
+    def test_get_usage_reads_json(self, mock_sub, config, mock_docker):
+        """get_usage should read /tmp/usage.json from the container."""
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+
+        usage_content = json.dumps({"input_tokens": 1000, "output_tokens": 500, "total_cost_usd": 0.03})
+
+        def fake_cp(*args, **kwargs):
+            cmd_args = args[0]
+            dest = cmd_args[-1]
+            with open(dest, "w") as f:
+                f.write(usage_content)
+
+        mock_sub.run.side_effect = fake_cp
+
+        result = wm.get_usage()
+        assert result["input_tokens"] == 1000
+        assert result["total_cost_usd"] == 0.03
+
+    @patch("pipeline.worker_manager.subprocess")
+    def test_get_usage_returns_empty_on_failure(self, mock_sub, config, mock_docker):
+        """get_usage should return empty dict if docker cp fails."""
+        import subprocess as real_subprocess
+        mock_sub.CalledProcessError = real_subprocess.CalledProcessError
+        mock_sub.run.side_effect = real_subprocess.CalledProcessError(1, "docker cp")
+
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+
+        result = wm.get_usage()
+        assert result == {}
+
+    def test_wait_for_completion_polls_sentinel(self, config, mock_docker):
+        """wait_for_completion should poll for /tmp/session-complete sentinel."""
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+
+        # Simulate sentinel file appearing on second check
+        call_count = [0]
+
+        def fake_exec(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                return MagicMock(returncode=0)
+            else:
+                return MagicMock(returncode=1)  # file not found
+
+        with patch("pipeline.worker_manager.subprocess") as mock_sub:
+            mock_sub.run.side_effect = fake_exec
+            with patch("pipeline.worker_manager.time.sleep"):
+                wm.wait_for_completion()
+
+        # Should have been called at least twice (first miss, then hit)
+        assert call_count[0] >= 2
+
     def test_is_alive_running(self, config, mock_docker):
         """is_alive should return True for a running container."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+        wm = WorkerManager(config, "test-run")
         wm._container = mock_docker["container"]
         mock_docker["container"].status = "running"
-
         assert wm.is_alive() is True
 
     def test_is_alive_exited(self, config, mock_docker):
         """is_alive should return False for an exited container."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+        wm = WorkerManager(config, "test-run")
         wm._container = mock_docker["container"]
-
-        # After reload, status is "exited"
         mock_docker["container"].status = "exited"
-
         assert wm.is_alive() is False
 
     def test_is_alive_no_container(self, config, mock_docker):
         """is_alive should return False when no container exists."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+        wm = WorkerManager(config, "test-run")
         wm._container = None
-
         assert wm.is_alive() is False
 
     def test_send_message_raises_if_no_container(self, config, mock_docker):
         """send_message should raise RuntimeError if container is None."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+        wm = WorkerManager(config, "test-run")
         wm._container = None
-
         with pytest.raises(RuntimeError, match="not running"):
             wm.send_message("hello")
 
     def test_send_message_raises_if_container_not_running(self, config, mock_docker):
         """send_message should raise RuntimeError if container is not running."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+        wm = WorkerManager(config, "test-run")
         wm._container = mock_docker["container"]
         mock_docker["container"].status = "exited"
-
         with pytest.raises(RuntimeError, match="exited"):
             wm.send_message("hello")
 
     def test_get_response_raises_if_no_container(self, config, mock_docker):
         """get_response should raise RuntimeError if container is None."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+        wm = WorkerManager(config, "test-run")
         wm._container = None
-
         with pytest.raises(RuntimeError, match="not running"):
             wm.get_response()
 
     def test_send_feedback_is_alias_for_send_message(self, config, mock_docker):
         """send_feedback should delegate to send_message."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+        wm = WorkerManager(config, "test-run")
         wm.send_message = MagicMock()
-
         wm.send_feedback("feedback text")
         wm.send_message.assert_called_once_with("feedback text")
 
-    def test_cleanup_unregisters_from_webhook(self, config, mock_docker):
-        """cleanup should unregister the container from webhook tracking."""
-        webhook = MagicMock()
-        wm = WorkerManager(config, "test-run", webhook=webhook)
+    def test_cleanup_removes_container(self, config, mock_docker):
+        """cleanup should remove the container (no webhook)."""
+        wm = WorkerManager(config, "test-run")
         wm._container = mock_docker["container"]
-        container_id = mock_docker["container"].id
-
         wm.cleanup()
-
-        webhook.unregister.assert_called_once_with(container_id)
+        mock_docker["container"].remove.assert_called_once_with(force=True)
 
 
 # =========================================================================
