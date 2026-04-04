@@ -14,8 +14,6 @@ import json
 import os
 import threading
 import time
-import urllib.request
-import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
@@ -788,11 +786,8 @@ class TestSessionManager:
             }
 
     def _make_manager(self, config):
-        """Create a SessionManager with the webhook server mocked out."""
-        sm = SessionManager(config)
-        sm._webhook = MagicMock()
-        sm._webhook_started = True  # skip starting the real server
-        return sm
+        """Create a SessionManager for testing."""
+        return SessionManager(config)
 
     def test_get_or_create_creates_new_session(self, config, mock_deps):
         """First call for a user should create a new session."""
@@ -1572,20 +1567,22 @@ class TestWorkerManager:
         wm = WorkerManager(config, "test-run")
         assert not hasattr(wm, "_webhook")
 
-    def test_send_message_chmods_file_after_docker_cp(self, config, mock_docker):
-        """send_message should chmod 644 after docker cp (regression test)."""
+    def test_send_message_clears_sentinel_before_cp(self, config, mock_docker):
+        """send_message should rm /tmp/session-complete BEFORE docker cp."""
         wm = WorkerManager(config, "test-run")
         wm._container = mock_docker["container"]
-        container_id = mock_docker["container"].id
 
         call_order = []
 
         def record_call(*args, **kwargs):
             cmd = args[0]
-            if cmd[0] == "docker" and cmd[1] == "cp":
+            if cmd[0] == "docker" and cmd[1] == "exec":
+                if "rm" in cmd:
+                    call_order.append("rm_sentinel")
+                elif "chmod" in cmd:
+                    call_order.append("docker_exec_chmod")
+            elif cmd[0] == "docker" and cmd[1] == "cp":
                 call_order.append("docker_cp")
-            elif cmd[0] == "docker" and cmd[1] == "exec":
-                call_order.append("docker_exec_chmod")
 
         with patch("pipeline.worker_manager.subprocess") as mock_sub:
             mock_sub.run.side_effect = record_call
@@ -1597,9 +1594,10 @@ class TestWorkerManager:
                 mock_tmp.NamedTemporaryFile.return_value = mock_file
 
                 with patch("pipeline.worker_manager.os.unlink"):
-                    wm.send_message("hello from orchestrator")
+                    wm.send_message("hello")
 
-        assert "docker_exec_chmod" in call_order
+        assert "rm_sentinel" in call_order, "must rm sentinel before writing next message"
+        assert call_order.index("rm_sentinel") < call_order.index("docker_cp")
         assert call_order.index("docker_cp") < call_order.index("docker_exec_chmod")
 
     @patch("pipeline.worker_manager.subprocess")

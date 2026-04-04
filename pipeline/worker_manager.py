@@ -1,4 +1,4 @@
-"""Docker container lifecycle management for the Worker (Leo/OpenClaw)."""
+"""Docker container lifecycle management for the Worker (Leo/Agent SDK)."""
 
 import json
 import logging
@@ -35,6 +35,7 @@ class WorkerManager:
             self.config.claude_code_token_env: os.environ.get(
                 self.config.claude_code_token_env, ""
             ),
+            "ALLOWED_TOOLS": ",".join(self.config.allowed_tools),
         }
 
         self._container = self._client.containers.run(
@@ -90,7 +91,7 @@ class WorkerManager:
         """Send a follow-up message to the Worker for another turn.
 
         Writes the message to a file inside the container. The Worker
-        entrypoint polls for this file and sends it to the same OpenClaw
+        entrypoint polls for this file and sends it to the same Agent SDK
         session, preserving full context.
         """
         if self._container is None:
@@ -108,6 +109,12 @@ class WorkerManager:
             tmp_path = f.name
 
         try:
+            subprocess.run(
+                ["docker", "exec", self._container.id, "rm", "-f", "/tmp/session-complete"],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
             subprocess.run(
                 ["docker", "cp", tmp_path, f"{self._container.id}:/tmp/next-message.txt"],
                 check=True,

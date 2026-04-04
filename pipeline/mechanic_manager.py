@@ -57,10 +57,9 @@ class MechanicManager:
                 if message_type == "AssistantMessage":
                     content = getattr(message, "content", []) or []
                     for block in content:
-                        if getattr(block, "type", None) == "text":
-                            text = getattr(block, "text", None)
-                            if isinstance(text, str) and text:
-                                assistant_text_parts.append(text)
+                        text = getattr(block, "text", None)
+                        if isinstance(text, str) and text:
+                            assistant_text_parts.append(text)
                     continue
 
                 if message_type == "ResultMessage":
@@ -88,7 +87,11 @@ class MechanicManager:
 
             thread = threading.Thread(target=_thread_runner)
             thread.start()
-            thread.join()
+            thread.join(timeout=self.config.mechanic_timeout)
+            if thread.is_alive():
+                raise TimeoutError(
+                    f"Mechanic evaluation timed out after {self.config.mechanic_timeout}s"
+                )
             if runner_error:
                 raise runner_error[0]
             result_text = runner_result.get("text", "")

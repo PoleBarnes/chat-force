@@ -148,24 +148,22 @@ def _build_client_options(
     post_hook = create_post_tool_use_hook(TOOL_LOG_PATH)
     stop_hook = create_stop_hook(SENTINEL_PATH, USAGE_PATH, usage_tracker)
 
-    if HookMatcher is not None:
-        hooks = {
-            "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_hook])],
-            "PostToolUse": [HookMatcher(matcher=None, hooks=[post_hook])],
-            "Stop": [HookMatcher(matcher=None, hooks=[stop_hook])],
-        }
-    else:
-        hooks = {
-            "PreToolUse": [pre_hook],
-            "PostToolUse": [post_hook],
-            "Stop": [stop_hook],
-        }
+    hooks = {
+        "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_hook])],
+        "PostToolUse": [HookMatcher(matcher=None, hooks=[post_hook])],
+        "Stop": [HookMatcher(matcher=None, hooks=[stop_hook])],
+    }
 
     options_kwargs = {
         "system_prompt": system_prompt,
         "permission_mode": "bypassPermissions",
         "max_turns": int(os.environ.get("MAX_TURNS", "50")),
         "max_budget_usd": float(os.environ.get("MAX_BUDGET_USD", "5.0")),
+        "allowed_tools": (
+            os.environ.get("ALLOWED_TOOLS", "").split(",")
+            if os.environ.get("ALLOWED_TOOLS")
+            else None
+        ),
         "hooks": hooks,
         "cwd": WORKSPACE_CWD,
     }
@@ -178,16 +176,12 @@ def _build_client_options(
 
 async def _main() -> None:
     from claude_agent_sdk import ClaudeSDKClient
+    from claude_agent_sdk import HookMatcher
 
     try:
         from claude_agent_sdk import ClaudeAgentOptions
     except ImportError:
         ClaudeAgentOptions = None
-
-    try:
-        from claude_agent_sdk import HookMatcher
-    except ImportError:
-        HookMatcher = None
 
     task_instruction = os.environ.get("TASK_INSTRUCTION")
     if not task_instruction:
@@ -208,8 +202,13 @@ async def _main() -> None:
         HookMatcher,
     )
 
+    idle_timeout = int(os.environ.get("IDLE_TIMEOUT", "600"))
+    loop = asyncio.get_event_loop()
+    last_activity = loop.time()
+
     async with ClaudeSDKClient(client_options) as client:
         await _run_turn(client, task_instruction, usage_tracker)
+        last_activity = loop.time()
 
         while True:
             if NEXT_MESSAGE_PATH.exists():
@@ -217,6 +216,10 @@ async def _main() -> None:
                 NEXT_MESSAGE_PATH.unlink(missing_ok=True)
                 if message_text.strip():
                     await _run_turn(client, message_text, usage_tracker)
+                    last_activity = loop.time()
+
+            if loop.time() - last_activity > idle_timeout:
+                break
 
             await asyncio.sleep(2)
 

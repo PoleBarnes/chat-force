@@ -180,7 +180,7 @@ def run_pipeline(task: str, config: PipelineConfig, reply_channel: str | None = 
                 with open(os.path.join(run_dir, "worker.log"), "w") as f:
                     f.write(logs)
         except Exception:
-            pass
+            log.debug("Could not save worker logs", exc_info=True)
 
         # Clean up containers
         worker.cleanup()
