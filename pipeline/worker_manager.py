@@ -126,7 +126,7 @@ class WorkerManager:
 
         try:
             subprocess.run(
-                ["docker", "exec", self._container.id, "rm", "-f", "/tmp/session-complete"],
+                ["docker", "exec", "-u", "root", self._container.id, "rm", "-f", "/tmp/session-complete"],
                 check=False,
                 capture_output=True,
                 timeout=5,
@@ -137,8 +137,10 @@ class WorkerManager:
                 capture_output=True,
                 timeout=10,
             )
+            # docker cp creates the file as root; must chmod as root so the
+            # non-root worker user can read it.
             subprocess.run(
-                ["docker", "exec", self._container.id, "chmod", "644", "/tmp/next-message.txt"],
+                ["docker", "exec", "-u", "root", self._container.id, "chmod", "644", "/tmp/next-message.txt"],
                 check=False,  # best effort
                 capture_output=True,
                 timeout=5,
