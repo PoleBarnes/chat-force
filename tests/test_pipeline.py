@@ -1723,8 +1723,8 @@ class TestWorkerManager:
             if cmd[0] == "docker" and cmd[1] == "exec":
                 if "rm" in cmd:
                     call_order.append("rm_sentinel")
-                elif "chmod" in cmd:
-                    call_order.append("docker_exec_chmod")
+                elif "chown" in cmd:
+                    call_order.append("docker_exec_chown")
             elif cmd[0] == "docker" and cmd[1] == "cp":
                 call_order.append("docker_cp")
 
@@ -1742,7 +1742,7 @@ class TestWorkerManager:
 
         assert "rm_sentinel" in call_order, "must rm sentinel before writing next message"
         assert call_order.index("rm_sentinel") < call_order.index("docker_cp")
-        assert call_order.index("docker_cp") < call_order.index("docker_exec_chmod")
+        assert call_order.index("docker_cp") < call_order.index("docker_exec_chown")
 
     @patch("pipeline.worker_manager.subprocess")
     def test_get_response_reads_plain_text(self, mock_sub, config, mock_docker):
