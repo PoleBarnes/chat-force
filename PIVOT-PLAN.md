@@ -196,11 +196,15 @@ Key principles:
 
 **Memory works through CLAUDE.md files** — Not a separate memory tool. Set `setting_sources=["project"]` to load `.claude/` project settings including memory.
 
-**MCP phased rollout:**
-- Phase 1: Playwright + GitHub + Memory + Context7 (core development loop)
+**Browser tool: agent-browser (Vercel)** — CLI-first, 7MB install, ~7K tokens/10-step flow (16x cheaper than Playwright MCP). Installed via `npm install -g agent-browser` in the Worker container. Agent calls it via Bash tool: `agent-browser open`, `agent-browser snapshot`, `agent-browser click @e1`. Key features: diff commands for visual verification, annotated screenshots, auth vault, snapshot-ref workflow. NOT an MCP server — pure CLI.
+
+**MCP phased rollout (Leo as MCP client):**
+- Phase 1: GitHub + Memory + Context7 (core development loop)
 - Phase 2: Firecrawl + Brave Search (research and web scraping)
 - Phase 3: Slack MCP + PostgreSQL (communication and data)
 - Phase 4: Video/media MCP servers (marketing content)
+
+Note: Browser automation uses agent-browser CLI (not MCP) because CLI is 16x more token-efficient than MCP-based browser tools.
 
 ## Delegation Pattern
 
