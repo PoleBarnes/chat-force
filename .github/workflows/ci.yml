@@ -19,7 +19,7 @@ jobs:
         run: |
           uv run --python 3.13 \
             --with docker,pytest,"slack_sdk>=3.41.0","slack_bolt>=1.27.0" \
-            pytest tests/test_pipeline.py tests/test_e2e_integration.py tests/test_slack_integration.py -v
+            pytest tests/test_pipeline.py tests/test_e2e_integration.py tests/test_slack_integration.py tests/test_docker_integration.py -v
 
   lint:
     runs-on: ubuntu-latest
