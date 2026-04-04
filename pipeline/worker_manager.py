@@ -8,7 +8,7 @@ import tempfile
 import time
 
 import docker
-from docker.errors import ImageNotFound, NotFound
+from docker.errors import APIError, ImageNotFound, NotFound
 
 from pipeline.config import PipelineConfig
 
@@ -26,8 +26,21 @@ class WorkerManager:
 
     # -- public API -----------------------------------------------------------
 
+    def _ensure_network(self) -> None:
+        """Create the Docker network if it does not already exist."""
+        try:
+            self._client.networks.create(
+                self.config.docker_network,
+                driver="bridge",
+                check_duplicate=True,
+            )
+            log.debug("Docker network created: %s", self.config.docker_network)
+        except APIError:
+            log.debug("Docker network already exists: %s", self.config.docker_network)
+
     def start(self, task: str) -> str:
         """Launch the Worker container. Returns the container ID."""
+        self._ensure_network()
         self._ensure_image()
 
         env = {
@@ -68,6 +81,9 @@ class WorkerManager:
             )
             if result.returncode == 0:
                 log.info("Worker completion sentinel detected")
+                error = self.get_error()
+                if error:
+                    log.warning("Worker reported error: %s", error[:500])
                 return
 
             self._container.reload()
@@ -206,6 +222,30 @@ class WorkerManager:
         except (OSError, json.JSONDecodeError, subprocess.CalledProcessError):
             log.warning("Could not copy usage.json from Worker")
             return {}
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    def get_error(self) -> str | None:
+        """Check for a crash error file in the Worker container.
+
+        Returns the error text if /tmp/worker-error.txt exists, None otherwise.
+        """
+        if self._container is None:
+            return None
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".txt", delete=False) as f:
+            tmp_path = f.name
+        try:
+            subprocess.run(
+                ["docker", "cp", f"{self._container.id}:/tmp/worker-error.txt", tmp_path],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+            with open(tmp_path, "r") as f:
+                return f.read()
+        except (OSError, subprocess.CalledProcessError):
+            return None
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)

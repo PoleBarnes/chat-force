@@ -2625,3 +2625,108 @@ class TestEntrypointHelpers:
         assert opts.max_turns == 10
         assert opts.max_budget_usd == 2.5
         assert opts.allowed_tools == ["Bash", "Read"]
+
+
+# =========================================================================
+# Phase 1: Docker network + crash detection tests
+# =========================================================================
+
+
+class TestDockerNetworkCreation:
+    """Test WorkerManager._ensure_network()."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    def test_start_creates_docker_network(self, config):
+        """start() should create the Docker network before starting container."""
+        from docker.errors import APIError
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_client = MagicMock()
+            mock_docker.from_env.return_value = mock_client
+            container = MagicMock()
+            container.id = "abc123" + "0" * 58
+            mock_client.containers.run.return_value = container
+            mock_client.images.get.return_value = MagicMock()
+
+            wm = WorkerManager(config, "test-run")
+            wm.start("task")
+
+            mock_client.networks.create.assert_called_once_with(
+                config.docker_network,
+                driver="bridge",
+                check_duplicate=True,
+            )
+
+    def test_start_handles_existing_network(self, config):
+        """start() should not crash if the network already exists."""
+        from docker.errors import APIError
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_client = MagicMock()
+            mock_docker.from_env.return_value = mock_client
+            mock_client.networks.create.side_effect = APIError("409 Conflict")
+            container = MagicMock()
+            container.id = "abc123" + "0" * 58
+            mock_client.containers.run.return_value = container
+            mock_client.images.get.return_value = MagicMock()
+
+            wm = WorkerManager(config, "test-run")
+            wm.start("task")  # should not raise
+
+            mock_client.containers.run.assert_called_once()
+
+
+class TestWorkerCrashDetection:
+    """Test Worker crash detection (error file)."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    @pytest.fixture
+    def mock_docker(self):
+        with patch("pipeline.worker_manager.docker") as mock_docker_mod:
+            mock_client = MagicMock()
+            mock_docker_mod.from_env.return_value = mock_client
+            container = MagicMock()
+            container.id = "abc123" + "0" * 58
+            container.status = "running"
+            mock_client.images.get.return_value = MagicMock()
+            yield {"client": mock_client, "container": container}
+
+    @patch("pipeline.worker_manager.subprocess")
+    def test_get_error_returns_error_text(self, mock_sub, config, mock_docker):
+        """get_error() should return crash text when error file exists."""
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+
+        def fake_cp(*args, **kwargs):
+            dest = args[0][-1]
+            with open(dest, "w") as f:
+                f.write("Worker crash: RuntimeError: something broke")
+
+        mock_sub.run.side_effect = fake_cp
+
+        result = wm.get_error()
+        assert result is not None
+        assert "RuntimeError" in result
+
+    @patch("pipeline.worker_manager.subprocess")
+    def test_get_error_returns_none_when_no_crash(self, mock_sub, config, mock_docker):
+        """get_error() should return None when no error file exists."""
+        import subprocess as real_sub
+        mock_sub.CalledProcessError = real_sub.CalledProcessError
+        mock_sub.run.side_effect = real_sub.CalledProcessError(1, "docker cp")
+
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+
+        result = wm.get_error()
+        assert result is None
+
+    def test_get_error_returns_none_when_no_container(self, config, mock_docker):
+        """get_error() should return None when _container is None."""
+        wm = WorkerManager(config, "test-run")
+        wm._container = None
+        assert wm.get_error() is None

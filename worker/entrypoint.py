@@ -225,4 +225,17 @@ async def _main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(_main())
+    try:
+        asyncio.run(_main())
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        import traceback
+
+        error_path = Path("/tmp/worker-error.txt")
+        error_path.write_text(
+            f"Worker crash: {type(exc).__name__}: {exc}\n\n{traceback.format_exc()}",
+            encoding="utf-8",
+        )
+        Path(SENTINEL_PATH).touch()
+        raise
