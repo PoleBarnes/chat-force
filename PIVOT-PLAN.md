@@ -48,30 +48,44 @@ Key principles:
 ### Step 2: New Worker Dockerfile + Python entrypoint with hooks
 - New `worker/Dockerfile` based on `python:3.13-slim` + `pip install claude-agent-sdk`
 - New `worker/entrypoint.py` that calls `query()` with system prompt assembled from workspace files
-- Register Agent SDK hooks in entrypoint:
+- **Agent SDK configuration in query() call:**
+  - `permission_mode="bypassPermissions"` — container is already sandboxed by Docker
+  - `allowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "ComputerUse"]` — full tool access including subagents and computer use
+  - `max_budget_usd` — from config, prevents runaway costs
+  - `max_turns` — from config, prevents infinite loops
+- **Hooks registered in entrypoint:**
   - `PostToolUse` — write every tool call + result to `/tmp/tool-log.jsonl` (ordered audit trail for Mechanic)
   - `PreToolUse` — log tool call intent to `/tmp/tool-log.jsonl`
-  - `Stop` — write `/tmp/session-complete` sentinel file
+  - `Stop` — write `/tmp/session-complete` sentinel file, write final usage/cost to `/tmp/usage.json`
+  - `SubagentStart/Stop` — log subagent activity to tool log
+- **Cost tracking:** Capture usage data (input/output tokens, cost) from each AssistantMessage, write cumulative totals to `/tmp/usage.json`
+- **Memory:** Configure Agent SDK memory storage at `/workspace/memory/` so the Mechanic can inspect what Leo learned during the session. Memory changes become part of the changeset.
 - Multi-turn via `/tmp/next-message.txt` polling, response to `/tmp/latest-response.txt`
-- **Tests:** Docker image builds, entrypoint starts with mocked SDK, hooks write to tool log
+- **Tests:** Docker image builds, entrypoint starts with mocked SDK, hooks write to tool log, usage tracking works
 
 ### Step 3: Update WorkerManager
 - Remove all webhook imports and code
 - `wait_for_completion()` polls for `/tmp/session-complete` sentinel (written by Stop hook)
 - `get_response()` reads plain text instead of OpenClaw JSON
-- `get_tool_log()` — NEW method: reads `/tmp/tool-log.jsonl` from container (ordered audit trail for Mechanic)
+- `get_tool_log()` — NEW: reads `/tmp/tool-log.jsonl` from container (ordered audit trail)
+- `get_usage()` — NEW: reads `/tmp/usage.json` from container (token counts, cost)
+- `get_memory()` — NEW: reads `/workspace/memory/` from container (what Leo learned)
 - `send_message()` keeps docker cp mechanism (with chmod fix)
-- **Tests:** Update WorkerManager unit tests, mock Docker API, test tool log extraction
+- **Tests:** Update WorkerManager unit tests, mock Docker API, test tool log/usage/memory extraction
 
 ### Step 4: Rewrite MechanicManager
 - Remove all Docker container code
 - `evaluate()` calls `query()` on the host with Mechanic system prompt
 - Use structured output for verdict JSON (no more regex parsing)
-- Include tool log (from Worker hooks) in the evaluation payload — Mechanic sees the ordered sequence of everything the agent did, not just the end-state diff
-- Keep `_prepare_evaluation()` — update it to include tool log data alongside git/docker diffs
+- Evaluation payload now includes:
+  - Git diff + docker diff (existing)
+  - Tool log from hooks (ordered sequence of everything the agent did)
+  - Usage/cost data (total tokens, cost for the session)
+  - Memory changes (what Leo learned — Mechanic decides if memory updates should persist)
+- Keep `_prepare_evaluation()` — update to assemble all new data sources
 - Keep `_validate_verdict()`
 - Move Mechanic persona files to `config/mechanic/`
-- **Tests:** Mock `query()`, test verdict parsing, test tool log inclusion in evaluation
+- **Tests:** Mock `query()`, test verdict parsing, test all data sources in evaluation payload
 
 ### Step 5: Delete response_parser.py + webhook_server.py
 - Remove files and all imports
