@@ -6,7 +6,7 @@ Assembles a JSON changeset bundle across four layers:
   1. Git diff    -- config/skill file changes in /workspace/config
   2. Docker diff -- filesystem changes visible to the Docker storage driver
   3. Telemetry   -- exit code, timestamps, container logs
-  4. OpenClaw    -- internal logs, memory snapshots, output JSON
+  4. Agent SDK   -- tool log (JSONL), usage data, response text
 """
 
 import fnmatch
@@ -80,7 +80,7 @@ class ChangesetExtractor:
         bundle["git_changes"] = self._extract_git_changes(container)
         bundle["docker_changes"] = self._extract_docker_changes(container)
         bundle["telemetry"] = self._extract_telemetry(container)
-        bundle["openclaw_logs"] = self._extract_openclaw_logs(container, container_id)
+        bundle["agent_logs"] = self._extract_agent_logs(container, container_id)
         bundle["output_files"] = self._extract_output_files(container, container_id)
         bundle["bundle_path"] = self.run_dir
 
@@ -220,41 +220,28 @@ class ChangesetExtractor:
 
         return result
 
-    # -- Layer 4: OpenClaw internal logs --------------------------------------
+    # -- Layer 4: Agent SDK logs -----------------------------------------------
 
-    def _extract_openclaw_logs(self, container, container_id: str) -> dict:
-        """Copy OpenClaw logs, memory, and output JSON from the container."""
-        logs_dir = os.path.join(self.run_dir, "openclaw-logs")
-        memory_dir = os.path.join(self.run_dir, "openclaw-memory")
-        output_path = os.path.join(self.run_dir, "openclaw-output.json")
+    def _extract_agent_logs(self, container, container_id: str) -> dict:
+        """Copy Agent SDK tool log, usage data, and response from the container."""
+        tool_log_path = os.path.join(self.run_dir, "tool-log.jsonl")
+        usage_path = os.path.join(self.run_dir, "usage.json")
+        response_path = os.path.join(self.run_dir, "latest-response.txt")
 
         result = {
-            "session_log_path": None,
-            "memory_path": None,
-            "output_path": None,
+            "tool_log_path": None,
+            "usage_path": None,
+            "response_path": None,
         }
 
-        # Each copy is best-effort; the paths may not exist inside the container.
-        if self._docker_cp(
-            container_id,
-            "/home/node/.openclaw/logs/",
-            logs_dir,
-        ):
-            result["session_log_path"] = logs_dir
+        if self._docker_cp(container_id, "/tmp/tool-log.jsonl", tool_log_path):
+            result["tool_log_path"] = tool_log_path
 
-        if self._docker_cp(
-            container_id,
-            "/home/node/.openclaw/workspace/memory/",
-            memory_dir,
-        ):
-            result["memory_path"] = memory_dir
+        if self._docker_cp(container_id, "/tmp/usage.json", usage_path):
+            result["usage_path"] = usage_path
 
-        if self._docker_cp(
-            container_id,
-            "/tmp/openclaw-output.json",
-            output_path,
-        ):
-            result["output_path"] = output_path
+        if self._docker_cp(container_id, "/tmp/latest-response.txt", response_path):
+            result["response_path"] = response_path
 
         return result
 

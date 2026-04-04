@@ -192,7 +192,7 @@ class TestChangesetExtractor:
     def test_extract_calls_all_four_layers(
         self, mock_subprocess, mock_docker_module, config, mock_container
     ):
-        """extract() should call git, docker-diff, telemetry, and openclaw layers."""
+        """extract() should call git, docker-diff, telemetry, and agent log layers."""
         mock_client = MagicMock()
         mock_docker_module.from_env.return_value = mock_client
         mock_client.containers.get.return_value = mock_container
@@ -210,7 +210,7 @@ class TestChangesetExtractor:
         assert "git_changes" in bundle
         assert "docker_changes" in bundle
         assert "telemetry" in bundle
-        assert "openclaw_logs" in bundle
+        assert "agent_logs" in bundle
         assert bundle["run_id"] == "test-run-001"
         assert bundle["task"] == "test task"
         assert bundle["worker_container"] == "fake-container-id"
@@ -646,7 +646,7 @@ class TestPipelineIntegration:
             "git_changes": {"file_contents": {"skills/auth.yaml": "content"}},
             "docker_changes": {},
             "telemetry": {},
-            "openclaw_logs": {},
+            "agent_logs": {},
         }
 
         pr_creator = MockPR.return_value
@@ -701,7 +701,7 @@ class TestPipelineIntegration:
             "git_changes": {},
             "docker_changes": {},
             "telemetry": {},
-            "openclaw_logs": {},
+            "agent_logs": {},
         }
 
         pr_creator = MockPR.return_value
@@ -806,7 +806,7 @@ class TestPipelineIntegration:
             "git_changes": {},
             "docker_changes": {},
             "telemetry": {},
-            "openclaw_logs": {},
+            "agent_logs": {},
         }
 
         summary = run_pipeline("Test", config)
@@ -862,7 +862,7 @@ class TestSessionManager:
                 "git_changes": {},
                 "docker_changes": {},
                 "telemetry": {},
-                "openclaw_logs": {},
+                "agent_logs": {},
             }
 
             mechanic = MockMechanic.return_value
@@ -1019,7 +1019,7 @@ class TestSessionManager:
             },
             "docker_changes": {},
             "telemetry": {},
-            "openclaw_logs": {},
+            "agent_logs": {},
         }
 
         result = sm.close_session("U009")
@@ -1041,7 +1041,7 @@ class TestSessionManager:
             },
             "docker_changes": {},
             "telemetry": {},
-            "openclaw_logs": {},
+            "agent_logs": {},
         }
 
         result = sm.close_session("U010")
@@ -2214,3 +2214,414 @@ class TestWorkerEntrypoint:
         assert len(lines) == 2
         assert json.loads(lines[0])["event"] == "PreToolUse"
         assert json.loads(lines[1])["event"] == "PostToolUse"
+
+
+# =========================================================================
+# P0: Critical path tests
+# =========================================================================
+
+
+class TestWorkerManagerStart:
+    """Test WorkerManager.start() env var propagation."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    def test_start_passes_correct_env_vars(self, config):
+        """start() should pass TASK_INSTRUCTION, ANTHROPIC_API_KEY, ALLOWED_TOOLS."""
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_client = MagicMock()
+            mock_docker.from_env.return_value = mock_client
+            container = MagicMock()
+            container.id = "abc123" + "0" * 58
+            mock_client.containers.run.return_value = container
+            mock_client.images.get.return_value = MagicMock()
+
+            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-token"}):
+                wm = WorkerManager(config, "test-run")
+                wm.start("Do something")
+
+            call_kwargs = mock_client.containers.run.call_args
+            env = call_kwargs[1]["environment"]
+
+            assert env["TASK_INSTRUCTION"] == "Do something"
+            assert env["ANTHROPIC_API_KEY"] == "sk-test-token"
+            assert "ALLOWED_TOOLS" in env
+            assert "Bash" in env["ALLOWED_TOOLS"]
+
+    def test_start_sets_container_name(self, config):
+        """start() should name the container worker-{run_id}."""
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_client = MagicMock()
+            mock_docker.from_env.return_value = mock_client
+            container = MagicMock()
+            container.id = "abc123" + "0" * 58
+            mock_client.containers.run.return_value = container
+            mock_client.images.get.return_value = MagicMock()
+
+            wm = WorkerManager(config, "my-run-42")
+            wm.start("task")
+
+            call_kwargs = mock_client.containers.run.call_args
+            assert call_kwargs[1]["name"] == "worker-my-run-42"
+
+
+class TestWaitForCompletionEdgeCases:
+    """Test WorkerManager.wait_for_completion() timeout and exit paths."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path), worker_timeout=2)
+
+    @pytest.fixture
+    def mock_docker(self):
+        with patch("pipeline.worker_manager.docker") as mock_docker_mod:
+            mock_client = MagicMock()
+            mock_docker_mod.from_env.return_value = mock_client
+            container = MagicMock()
+            container.id = "abc123" + "0" * 58
+            container.status = "running"
+            container.attrs = {"State": {"ExitCode": 0}}
+            mock_client.images.get.return_value = MagicMock()
+            yield {"client": mock_client, "container": container}
+
+    def test_timeout_raises(self, config, mock_docker):
+        """wait_for_completion should raise TimeoutError when sentinel never appears."""
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+
+        with patch("pipeline.worker_manager.subprocess") as mock_sub:
+            mock_sub.run.return_value = MagicMock(returncode=1)
+            with patch("pipeline.worker_manager.time.sleep"):
+                with patch("pipeline.worker_manager.time.monotonic") as mock_time:
+                    mock_time.side_effect = [0.0, 0.0, 1.0, 3.0]
+                    with pytest.raises(TimeoutError, match="Worker did not complete"):
+                        wm.wait_for_completion()
+
+    def test_container_exits_before_sentinel(self, config, mock_docker):
+        """wait_for_completion should raise when container exits without sentinel."""
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+        mock_docker["container"].status = "exited"
+        mock_docker["container"].attrs = {"State": {"ExitCode": 1}}
+
+        with patch("pipeline.worker_manager.subprocess") as mock_sub:
+            mock_sub.run.return_value = MagicMock(returncode=1)
+            with patch("pipeline.worker_manager.time.sleep"):
+                with patch("pipeline.worker_manager.time.monotonic") as mock_time:
+                    mock_time.side_effect = [0.0, 0.0, 3.0]
+                    with pytest.raises(TimeoutError):
+                        wm.wait_for_completion()
+
+
+class TestWorkerManagerCleanupEdgeCases:
+    """Test WorkerManager.cleanup() edge cases."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    def test_cleanup_when_container_is_none(self, config):
+        """cleanup() should be a no-op when _container is None."""
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_docker.from_env.return_value = MagicMock()
+            wm = WorkerManager(config, "test-run")
+            wm._container = None
+            wm.cleanup()  # should not raise
+
+    def test_cleanup_handles_not_found(self, config):
+        """cleanup() should handle NotFound gracefully."""
+        from docker.errors import NotFound
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_docker.from_env.return_value = MagicMock()
+            wm = WorkerManager(config, "test-run")
+            container = MagicMock()
+            container.remove.side_effect = NotFound("gone")
+            wm._container = container
+            wm.cleanup()  # should not raise
+
+
+class TestFormatFeedback:
+    """Test _format_feedback() output formatting."""
+
+    def test_with_feedback_items(self):
+        """Feedback items should be numbered in the output."""
+        from pipeline.main import _format_feedback
+        result = _format_feedback(["Fix tests", "Add docstring"], "Code quality", 1)
+        assert "iteration 1" in result
+        assert "Code quality" in result
+        assert "1. Fix tests" in result
+        assert "2. Add docstring" in result
+
+    def test_without_feedback_items(self):
+        """Empty feedback list should still include reason."""
+        from pipeline.main import _format_feedback
+        result = _format_feedback([], "No changes detected", 2)
+        assert "iteration 2" in result
+        assert "No changes detected" in result
+        assert "Specific items" not in result
+
+
+class TestPrepareEvaluationFiltering:
+    """Test MechanicManager._prepare_evaluation() filtering logic."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    def test_filters_binary_files(self, config):
+        """Binary files should be excluded from file_contents."""
+        mm = MechanicManager(config, "test-run")
+        changeset = {
+            "task": "test",
+            "git_changes": {
+                "file_contents": {
+                    "src/main.py": "print('hello')",
+                    "assets/logo.png": "<binary data>",
+                    "assets/video.mp4": "<binary data>",
+                },
+            },
+            "docker_changes": {},
+            "telemetry": {},
+            "output_files": {},
+        }
+        evaluation = mm._prepare_evaluation(changeset)
+        contents = evaluation["git_changes"]["file_contents"]
+        assert "src/main.py" in contents
+        assert "assets/logo.png" not in contents
+        assert "assets/video.mp4" not in contents
+        assert len(evaluation["git_changes"]["skipped_files"]) == 2
+
+    def test_filters_lock_files(self, config):
+        """Lock files should be excluded from file_contents."""
+        mm = MechanicManager(config, "test-run")
+        changeset = {
+            "task": "test",
+            "git_changes": {
+                "file_contents": {
+                    "src/app.js": "console.log('hi')",
+                    "package-lock.json": '{"very": "large"}',
+                },
+            },
+            "docker_changes": {},
+            "telemetry": {},
+            "output_files": {},
+        }
+        evaluation = mm._prepare_evaluation(changeset)
+        contents = evaluation["git_changes"]["file_contents"]
+        assert "src/app.js" in contents
+        assert "package-lock.json" not in contents
+
+    def test_filters_oversized_files(self, config):
+        """Files over 50K chars should be excluded."""
+        mm = MechanicManager(config, "test-run")
+        changeset = {
+            "task": "test",
+            "git_changes": {
+                "file_contents": {"small.py": "x = 1", "huge.py": "x" * 60_000},
+            },
+            "docker_changes": {},
+            "telemetry": {},
+            "output_files": {},
+        }
+        evaluation = mm._prepare_evaluation(changeset)
+        assert "small.py" in evaluation["git_changes"]["file_contents"]
+        assert "huge.py" not in evaluation["git_changes"]["file_contents"]
+
+    def test_truncates_long_logs(self, config):
+        """Container logs > 100 lines should be truncated."""
+        mm = MechanicManager(config, "test-run")
+        long_logs = "\n".join(f"log line {i}" for i in range(200))
+        changeset = {
+            "task": "test",
+            "git_changes": {},
+            "docker_changes": {},
+            "telemetry": {"container_logs": long_logs},
+            "output_files": {},
+        }
+        evaluation = mm._prepare_evaluation(changeset)
+        logs = evaluation["telemetry"]["container_logs"]
+        assert "truncated" in logs.lower()
+        assert "log line 199" in logs
+        assert "log line 0" not in logs
+
+
+class TestRunPipelineFeedbackLoop:
+    """Test the reject-feedback-retry loop in run_pipeline()."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    @patch("pipeline.main.SlackHandler")
+    @patch("pipeline.main.PRCreator")
+    @patch("pipeline.main.ChangesetExtractor")
+    @patch("pipeline.main.MechanicManager")
+    @patch("pipeline.main.WorkerManager")
+    def test_approve_on_second_iteration(
+        self, MockWorker, MockMechanic, MockExtractor, MockPR, MockSlack, config
+    ):
+        """Pipeline should send feedback on rejection, then succeed on approval."""
+        from pipeline.main import run_pipeline
+
+        worker = MockWorker.return_value
+        worker.start.return_value = "cid"
+        worker.is_alive.return_value = True
+
+        extractor = MockExtractor.return_value
+        extractor.extract.return_value = {
+            "task": "test",
+            "git_changes": {"new_files": ["a.py"], "file_contents": {"a.py": "x=1"}},
+        }
+
+        mechanic = MockMechanic.return_value
+        mechanic.evaluate.side_effect = [
+            {"approved": False, "reason": "Missing tests", "feedback": ["Add tests"]},
+            {"approved": True, "pr_title": "Add feature", "files_to_include": ["a.py"]},
+        ]
+        pr = MockPR.return_value
+        pr.create.return_value = "https://github.com/test/pr/1"
+
+        result = run_pipeline("test task", config)
+        assert result["status"] == "approved"
+        assert result["iterations"] == 2
+        worker.send_feedback.assert_called_once()
+
+    @patch("pipeline.main.SlackHandler")
+    @patch("pipeline.main.ChangesetExtractor")
+    @patch("pipeline.main.MechanicManager")
+    @patch("pipeline.main.WorkerManager")
+    def test_max_iterations_exhausted(
+        self, MockWorker, MockMechanic, MockExtractor, MockSlack, config
+    ):
+        """Pipeline should stop after MAX_ITERATIONS rejections."""
+        from pipeline.main import run_pipeline, MAX_ITERATIONS
+
+        worker = MockWorker.return_value
+        worker.start.return_value = "cid"
+        worker.is_alive.return_value = True
+
+        MockExtractor.return_value.extract.return_value = {
+            "task": "test", "git_changes": {"new_files": ["a.py"], "file_contents": {}},
+        }
+        MockMechanic.return_value.evaluate.return_value = {
+            "approved": False, "reason": "Still bad", "feedback": ["Fix"],
+        }
+
+        result = run_pipeline("test task", config)
+        assert result["status"] == "rejected"
+        assert result["iterations"] == MAX_ITERATIONS
+
+    @patch("pipeline.main.SlackHandler")
+    @patch("pipeline.main.ChangesetExtractor")
+    @patch("pipeline.main.MechanicManager")
+    @patch("pipeline.main.WorkerManager")
+    def test_discard_disposition(
+        self, MockWorker, MockMechanic, MockExtractor, MockSlack, config
+    ):
+        """disposition=discard should stop without retrying."""
+        from pipeline.main import run_pipeline
+
+        MockWorker.return_value.start.return_value = "cid"
+        MockExtractor.return_value.extract.return_value = {
+            "task": "test", "git_changes": {"new_files": ["a.py"], "file_contents": {}},
+        }
+        MockMechanic.return_value.evaluate.return_value = {
+            "approved": False, "reason": "Unsafe", "disposition": "discard",
+        }
+
+        result = run_pipeline("test task", config)
+        assert result["status"] == "rejected"
+        assert result["iterations"] == 1
+
+    @patch("pipeline.main.SlackHandler")
+    @patch("pipeline.main.ChangesetExtractor")
+    @patch("pipeline.main.MechanicManager")
+    @patch("pipeline.main.WorkerManager")
+    def test_worker_dies_mid_loop(
+        self, MockWorker, MockMechanic, MockExtractor, MockSlack, config
+    ):
+        """Pipeline should stop gracefully if worker dies during feedback loop."""
+        from pipeline.main import run_pipeline
+
+        worker = MockWorker.return_value
+        worker.start.return_value = "cid"
+        worker.is_alive.return_value = False
+
+        MockExtractor.return_value.extract.return_value = {
+            "task": "test", "git_changes": {"new_files": ["a.py"], "file_contents": {}},
+        }
+        MockMechanic.return_value.evaluate.return_value = {
+            "approved": False, "reason": "Needs work", "feedback": ["Fix"],
+        }
+
+        result = run_pipeline("test task", config)
+        assert result["status"] == "error"
+        assert "died" in result["error"].lower() or "Worker" in result["error"]
+
+
+class TestEntrypointHelpers:
+    """Test worker/entrypoint.py helper functions."""
+
+    def test_extract_text_blocks_with_text(self):
+        """_extract_text_blocks should extract text from TextBlock-like objects."""
+        from worker.entrypoint import _extract_text_blocks
+
+        class FakeBlock:
+            def __init__(self, t): self.text = t
+
+        class FakeMessage:
+            def __init__(self, b): self.content = b
+
+        assert _extract_text_blocks(FakeMessage([FakeBlock("Hello "), FakeBlock("world")])) == "Hello world"
+
+    def test_extract_text_blocks_no_content(self):
+        """_extract_text_blocks should handle missing content attribute."""
+        from worker.entrypoint import _extract_text_blocks
+        assert _extract_text_blocks(object()) == ""
+
+    def test_accumulate_usage_with_data(self):
+        """_accumulate_usage should add tokens from message usage."""
+        from worker.entrypoint import _accumulate_usage
+
+        class Msg:
+            usage = {"input_tokens": 100, "output_tokens": 50}
+
+        tracker = {"input_tokens": 0, "output_tokens": 0, "total_cost_usd": 0.0}
+        _accumulate_usage(Msg(), tracker)
+        assert tracker["input_tokens"] == 100
+        assert tracker["output_tokens"] == 50
+
+    def test_accumulate_usage_no_usage(self):
+        """_accumulate_usage should handle messages without usage attribute."""
+        from worker.entrypoint import _accumulate_usage
+        tracker = {"input_tokens": 10, "output_tokens": 5, "total_cost_usd": 0.0}
+        _accumulate_usage(object(), tracker)
+        assert tracker["input_tokens"] == 10  # unchanged
+
+    def test_build_system_prompt_format(self, tmp_path):
+        """build_system_prompt should format with # headers."""
+        from worker.entrypoint import build_system_prompt
+        (tmp_path / "SOUL.md").write_text("Be helpful.")
+        (tmp_path / "IDENTITY.md").write_text("Name: Leo")
+        prompt = build_system_prompt(str(tmp_path))
+        assert prompt.startswith("# SOUL\n")
+        assert "# IDENTITY\n" in prompt
+
+    def test_build_client_options_reads_env_vars(self):
+        """_build_client_options should read MAX_TURNS and MAX_BUDGET_USD from env."""
+        from worker.entrypoint import _build_client_options
+
+        class FakeHookMatcher:
+            def __init__(self, matcher=None, hooks=None): pass
+
+        class FakeOptions:
+            def __init__(self, **kw):
+                for k, v in kw.items(): setattr(self, k, v)
+
+        with patch.dict(os.environ, {"MAX_TURNS": "10", "MAX_BUDGET_USD": "2.5", "ALLOWED_TOOLS": "Bash,Read"}):
+            opts = _build_client_options("prompt", {}, FakeOptions, FakeHookMatcher)
+        assert opts.max_turns == 10
+        assert opts.max_budget_usd == 2.5
+        assert opts.allowed_tools == ["Bash", "Read"]

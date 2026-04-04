@@ -1,4 +1,4 @@
-"""Validate OpenClaw skill files.
+"""Validate skill files.
 
 Every skill in skills/ is a Markdown file with YAML frontmatter
 that defines the skill's metadata. This module validates that all skills
