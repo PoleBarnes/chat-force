@@ -174,11 +174,10 @@ Key principles:
 8. Keep your own context clean — let agents do the file reading and editing
 
 **Agent team roles:**
-- **Backend agents** — Python code changes (pipeline/, worker/, config)
-- **Infrastructure agents** — Dockerfiles, entrypoints, container setup
-- **Testing agents** — Write tests before and after implementation
-- **Architecture reviewers** — Review each step for correctness
-- **Documentation agents** — Update HANDOFF.md, REQUIREMENTS.md, JOURNAL.md
+- **Codex CLI (`codex exec`)** — ALL code writing. Codex is extremely thorough and careful. Use it for Python, Dockerfiles, entrypoints, tests, config changes.
+- **Codex CLI (`codex review`)** — Code reviews after implementation
+- **Claude agents (research/planning)** — Research, architecture analysis, codebase exploration, planning
+- **Claude agents (orchestration)** — Coordinate work, verify outputs, run tests, commit/push
 
 ## Risks
 
