@@ -17,17 +17,34 @@ import os
 import re
 import signal
 import sys
-import threading
-import time
 import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from slack_bolt import App
+from slack_bolt import App, Assistant, SetStatus, SetTitle, SetSuggestedPrompts, Say
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from slack_sdk.models.blocks import (
+    Block,
+    ContextActionsBlock,
+    FeedbackButtonObject,
+    FeedbackButtonsElement,
+)
 
 from pipeline.config import PipelineConfig
 from pipeline.session_manager import Session, SessionManager
+
+# Thinking-step chunk types -- available in slack_sdk >= 3.41.
+# Fall back gracefully if running an older SDK.
+try:
+    from slack_sdk.models.messages.chunk import (
+        MarkdownTextChunk,
+        PlanUpdateChunk,
+        TaskUpdateChunk,
+    )
+
+    _HAS_CHUNKS = True
+except ImportError:  # pragma: no cover
+    _HAS_CHUNKS = False
 
 if TYPE_CHECKING:
     from slack_sdk import WebClient
@@ -149,357 +166,31 @@ def _make_session_closed_callback(client: WebClient):
 
 
 # ---------------------------------------------------------------------------
-# Live status helpers
+# Feedback buttons
 # ---------------------------------------------------------------------------
 
 
-def _set_presence(client: WebClient, presence: str) -> None:
-    """Set bot presence to 'auto' (online/idle) or 'away'."""
-    try:
-        client.users_setPresence(presence=presence)
-    except Exception:
-        log.debug("Could not set presence to %s", presence, exc_info=True)
-
-
-def _has_streaming(client: WebClient) -> bool:
-    """Check if the Slack client supports the modern streaming APIs."""
-    return hasattr(client, "chat_startStream")
-
-
-def _has_assistant_threads(client: WebClient) -> bool:
-    """Check if the Slack client supports assistant.threads.setStatus."""
-    return hasattr(client, "assistant_threads_setStatus")
-
-
-# -- Fallback helpers (classic chat.postMessage + chat.update) --------------
-
-
-def _post_status(
-    client: WebClient, channel: str, text: str, *, thread_ts: str | None = None,
-) -> str:
-    """Post a new status message. Returns its ts for later updates."""
-    resp = client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
-    return resp["ts"]
-
-
-def _update_status(client: WebClient, channel: str, ts: str, text: str) -> None:
-    """Update an existing message in-place (live progress effect)."""
-    try:
-        client.chat_update(channel=channel, ts=ts, text=text)
-    except Exception:
-        log.debug("Could not update status message", exc_info=True)
-
-
-# -- Streaming helpers (modern chat.startStream / appendStream / stopStream) -
-
-
-def _set_thread_status(
-    client: WebClient,
-    channel: str,
-    thread_ts: str,
-    status: str,
-    *,
-    loading_messages: list[str] | None = None,
-) -> None:
-    """Set the assistant thread typing indicator / status text.
-
-    Uses assistant.threads.setStatus when available, otherwise no-op.
-
-    Pass *loading_messages* to override Slack's default rotating status
-    strings (e.g. "evaluating", "searching").  An empty list disables
-    the rotation entirely so only *status* is shown.
-    """
-    if _has_assistant_threads(client):
-        try:
-            kwargs: dict = {
-                "channel_id": channel,
-                "thread_ts": thread_ts,
-                "status": status,
-            }
-            if loading_messages is not None:
-                kwargs["loading_messages"] = loading_messages
-            client.assistant_threads_setStatus(**kwargs)
-        except Exception:
-            log.debug("assistant_threads_setStatus failed", exc_info=True)
-
-
-_cached_team_id: str | None = None
-
-
-def _get_team_id(client: WebClient) -> str:
-    """Get the workspace team ID (cached after first call)."""
-    global _cached_team_id
-    if _cached_team_id is None:
-        resp = client.auth_test()
-        _cached_team_id = resp.get("team_id", "")
-    return _cached_team_id
-
-
-def _stream_response(
-    client: WebClient, channel: str, text: str, *, thread_ts: str | None = None,
-) -> None:
-    """Stream a response using chat.startStream / appendStream / stopStream.
-
-    Falls back to a plain chat.postMessage if streaming APIs are unavailable.
-    """
-    if not _has_streaming(client):
-        client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
-        return
-
-    try:
-        team_id = _get_team_id(client)
-        stream_result = client.chat_startStream(
-            channel=channel,
-            thread_ts=thread_ts,
-            recipient_team_id=team_id,
-        )
-        stream_channel = stream_result["channel"]
-        stream_ts = stream_result["ts"]
-
-        client.chat_appendStream(
-            channel=stream_channel,
-            ts=stream_ts,
-            markdown_text=text,
-        )
-
-        client.chat_stopStream(
-            channel=stream_channel,
-            ts=stream_ts,
-        )
-    except Exception:
-        # If streaming fails mid-flight, fall back to a regular message.
-        log.warning("Streaming failed, falling back to chat.postMessage", exc_info=True)
-        client.chat_postMessage(channel=channel, text=text, thread_ts=thread_ts)
-
-
-# ---------------------------------------------------------------------------
-# Event deduplication (app_mention + message double-fire)
-# ---------------------------------------------------------------------------
-
-# Slack fires both `message` and `app_mention` for @-mentions.  We track
-# recently-handled event timestamps so only the first handler runs.
-_seen_events: dict[str, float] = {}   # event_ts -> wall-clock time
-_seen_events_lock = threading.Lock()
-_SEEN_EVENT_TTL = 60  # seconds to remember an event
-
-
-def _is_duplicate_event(event_ts: str) -> bool:
-    """Return True if this event_ts was already processed recently."""
-    now = time.monotonic()
-
-    with _seen_events_lock:
-        # Periodic purge of stale entries.
-        stale = [ts for ts, t in _seen_events.items() if now - t > _SEEN_EVENT_TTL]
-        for ts in stale:
-            del _seen_events[ts]
-
-        if event_ts in _seen_events:
-            return True
-        _seen_events[event_ts] = now
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Core message routing
-# ---------------------------------------------------------------------------
-
-
-def _handle_user_message(
-    user_id: str,
-    channel_id: str,
-    text: str,
-    say,
-    client: WebClient,
-    session_manager: SessionManager,
-    *,
-    event_ts: str | None = None,
-) -> None:
-    """Route an incoming user message through the session manager."""
-
-    # De-duplicate: Slack sends both `message` and `app_mention` for
-    # @-mentions.  Whichever handler fires first wins; the second is a no-op.
-    if event_ts is not None and _is_duplicate_event(event_ts):
-        log.debug("Skipping duplicate event %s", event_ts)
-        return
-
-    # The event's ts is the message timestamp — use it as thread_ts so all
-    # responses are posted as threaded replies to the user's message.
-    thread_ts = event_ts
-
-    # Check for an existing session first (fast path, no blocking).
-    existing = session_manager.get_session(user_id)
-
-    _set_presence(client, "auto")  # mark active
-
-    use_streaming = _has_streaming(client)
-
-    if existing is not None:
-        # ── Follow-up message in existing session ──
-        if use_streaming:
-            _set_thread_status(
-                client, channel_id, thread_ts or "",
-                "Reading your message...",
-                loading_messages=[],
-            )
-            try:
-                response = session_manager.send_message(existing, text)
-                _set_thread_status(
-                    client, channel_id, thread_ts or "",
-                    "Preparing response...",
-                    loading_messages=[],
+def _feedback_blocks() -> list[Block]:
+    """Return Block Kit feedback buttons (thumbs up / down) for streamed messages."""
+    return [
+        ContextActionsBlock(
+            elements=[
+                FeedbackButtonsElement(
+                    action_id="feedback",
+                    positive_button=FeedbackButtonObject(
+                        text="Good Response",
+                        accessibility_label="Submit positive feedback on this response",
+                        value="good-feedback",
+                    ),
+                    negative_button=FeedbackButtonObject(
+                        text="Bad Response",
+                        accessibility_label="Submit negative feedback on this response",
+                        value="bad-feedback",
+                    ),
                 )
-                _stream_response(
-                    client, channel_id,
-                    response or "_Leo didn't produce a response._",
-                    thread_ts=thread_ts,
-                )
-                _set_thread_status(client, channel_id, thread_ts or "", "")
-            except TimeoutError:
-                _stream_response(
-                    client, channel_id,
-                    ":hourglass: Timed out waiting for Leo. Try again or start a new session.",
-                    thread_ts=thread_ts,
-                )
-                _set_thread_status(client, channel_id, thread_ts or "", "")
-            except RuntimeError as exc:
-                log.error("send_message failed for user %s: %s", user_id, exc)
-                _stream_response(
-                    client, channel_id,
-                    f":warning: Could not deliver message: {exc}",
-                    thread_ts=thread_ts,
-                )
-                _set_thread_status(client, channel_id, thread_ts or "", "")
-        else:
-            # Fallback: classic postMessage + update pattern.
-            status_ts = _post_status(
-                client, channel_id,
-                ":hourglass_flowing_sand: _Leo is thinking..._",
-                thread_ts=thread_ts,
-            )
-            try:
-                response = session_manager.send_message(existing, text)
-                _update_status(client, channel_id, status_ts, response or "_Leo didn't produce a response._")
-            except TimeoutError:
-                _update_status(client, channel_id, status_ts, ":hourglass: Timed out waiting for Leo. Try again or start a new session.")
-            except RuntimeError as exc:
-                log.error("send_message failed for user %s: %s", user_id, exc)
-                _update_status(client, channel_id, status_ts, f":warning: Could not deliver message: {exc}")
-        return
-
-    # ── New session ──
-    if use_streaming:
-        _set_thread_status(
-            client, channel_id, thread_ts or "",
-            "Setting up sandbox...",
-            loading_messages=[],
+            ]
         )
-
-        # Read channel history for context.
-        history_context = _read_channel_history(client, channel_id, limit=20)
-        if history_context:
-            enriched_message = f"{history_context}\n\n---\n\nUser's request:\n{text}"
-        else:
-            enriched_message = text
-
-        _set_thread_status(
-            client, channel_id, thread_ts or "",
-            "Spinning up sandbox...",
-            loading_messages=[],
-        )
-
-        try:
-            session, _is_new = session_manager.get_or_create_session(
-                user_id, channel_id, enriched_message
-            )
-        except Exception as exc:
-            log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
-            _stream_response(
-                client, channel_id,
-                f":x: Could not start a session: {exc}",
-                thread_ts=thread_ts,
-            )
-            _set_thread_status(client, channel_id, thread_ts or "", "")
-            return
-
-        version = session.sandbox_version
-        _set_thread_status(
-            client, channel_id, thread_ts or "",
-            "Leo is working...",
-            loading_messages=[],
-        )
-
-        # Retrieve the first-turn response and stream it.
-        try:
-            response = session.worker.get_response()
-            _set_thread_status(
-                client, channel_id, thread_ts or "",
-                "Preparing response...",
-                loading_messages=[],
-            )
-            _stream_response(
-                client, channel_id,
-                f":package: `main@{version}`\n\n{response}" if response
-                else "_Leo didn't produce a response._",
-                thread_ts=thread_ts,
-            )
-            _set_thread_status(client, channel_id, thread_ts or "", "")
-        except Exception as exc:
-            log.error("Could not get first-turn response: %s", exc, exc_info=True)
-            _stream_response(
-                client, channel_id,
-                f":warning: Session started (`main@{version}`) but could not read the response: {exc}",
-                thread_ts=thread_ts,
-            )
-            _set_thread_status(client, channel_id, thread_ts or "", "")
-    else:
-        # Fallback: classic postMessage + update pattern.
-        status_ts = _post_status(
-            client, channel_id,
-            ":package: *New session* -- reading channel history...",
-            thread_ts=thread_ts,
-        )
-
-        # Read channel history for context.
-        history_context = _read_channel_history(client, channel_id, limit=20)
-        if history_context:
-            enriched_message = f"{history_context}\n\n---\n\nUser's request:\n{text}"
-        else:
-            enriched_message = text
-
-        _update_status(
-            client, channel_id, status_ts,
-            ":package: *New session* -- spinning up sandbox..."
-        )
-
-        try:
-            session, _is_new = session_manager.get_or_create_session(
-                user_id, channel_id, enriched_message
-            )
-        except Exception as exc:
-            log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
-            _update_status(client, channel_id, status_ts, f":x: Could not start a session: {exc}")
-            return
-
-        version = session.sandbox_version
-        _update_status(
-            client, channel_id, status_ts,
-            f":package: *New session* -- sandbox `main@{version}` -- _Leo is working..._"
-        )
-
-        # Retrieve the first-turn response and replace the status message.
-        try:
-            response = session.worker.get_response()
-            _update_status(
-                client, channel_id, status_ts,
-                f":package: `main@{version}`\n\n{response}" if response
-                else "_Leo didn't produce a response._"
-            )
-        except Exception as exc:
-            log.error("Could not get first-turn response: %s", exc, exc_info=True)
-            _update_status(
-                client, channel_id, status_ts,
-                f":warning: Session started (`main@{version}`) but could not read the response: {exc}"
-            )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -516,48 +207,236 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
     # Wire up the session-close callback so Mechanic results reach Slack.
     session_manager.on_session_closed = _make_session_closed_callback(app.client)
 
-    # Log streaming API availability at startup.
-    if _has_streaming(app.client):
-        log.info("Slack streaming APIs (chat.startStream) detected -- using streaming mode")
-    else:
-        log.info(
-            "Slack streaming APIs not available in this slack_sdk version -- "
-            "using classic chat.postMessage + chat.update fallback"
-        )
+    # -- Assistant class (handles DM / assistant-panel threads) --------------
 
-    # -- event: direct message or channel message ----------------------------
+    assistant = Assistant()
 
-    @app.event("message")
-    def handle_message(event, say, client):
-        user_id = event.get("user")
-        channel_id = event.get("channel")
-        text = event.get("text", "")
-        event_ts = event.get("event_ts") or event.get("ts")
-
-        # Skip bot messages to prevent infinite loops.
-        if event.get("bot_id") or event.get("subtype") or not user_id:
-            return
-
-        # Process DMs and thread replies (where user is continuing a conversation
-        # Leo started). Channel root messages require @mention (app_mention handler).
-        is_dm = event.get("channel_type") == "im"
-        is_thread_reply = event.get("thread_ts") is not None and event.get("thread_ts") != event.get("ts")
-        if not is_dm and not is_thread_reply:
-            return
-
-        if not text.strip():
-            return
-
+    @assistant.thread_started
+    def handle_thread_started(say: Say, set_suggested_prompts: SetSuggestedPrompts, set_title: SetTitle, logger):
         try:
-            _handle_user_message(user_id, channel_id, text, say, client, session_manager, event_ts=event_ts)
-        except Exception:
-            log.error("Unhandled error in message handler:\n%s", traceback.format_exc())
+            say("Hey! I'm Leo \u2014 your digital worker. Tell me what you need and I'll spin up a sandbox to get it done. \U0001f935")
+            set_suggested_prompts(
+                prompts=[
+                    {
+                        "title": "Build something",
+                        "message": "Create a new Express.js REST API with SQLite persistence and tests",
+                    },
+                    {
+                        "title": "Create a video ad",
+                        "message": "Use Remotion to create a 15-second Facebook video ad for my product",
+                    },
+                    {
+                        "title": "Research a tool",
+                        "message": "Research Remotion and create a skill file documenting how to use it",
+                    },
+                    {
+                        "title": "Write a scraper",
+                        "message": "Build a Python web scraper that extracts data from a website",
+                    },
+                ]
+            )
+        except Exception as e:
+            logger.exception(f"Failed to handle assistant_thread_started event: {e}")
+            say(f":warning: Something went wrong! ({e})")
+
+    @assistant.user_message
+    def handle_user_message(payload, client, context, say, set_status, set_title, logger):
+        """Route assistant-thread messages through the session manager.
+
+        Replaces the old ``@app.event("message")`` handler and the
+        ``_handle_user_message`` helper.  Bolt's Assistant class calls
+        this for every user message in a DM / assistant thread, with
+        deduplication and status lifecycle handled automatically.
+
+        When the SDK supports chunk types, responses include structured
+        thinking steps (plan / timeline) so the user sees progress
+        checkmarks instead of flat status text.
+        """
+        try:
+            user_id = context.user_id
+            channel_id = payload["channel"]
+            text = payload.get("text", "")
+            thread_ts = payload["thread_ts"]
+
+            if not text.strip():
+                return
+
+            set_status(status="Reading your message...", loading_messages=[])
+
+            # -- Check for existing session (fast path) --
+            existing = session_manager.get_session(user_id)
+
+            if existing is not None:
+                # ── Follow-up message in existing session ──
+                set_status(status="Leo is thinking...", loading_messages=[])
+
+                try:
+                    response = session_manager.send_message(existing, text)
+                except TimeoutError:
+                    say(":hourglass: Timed out waiting for Leo. Try again or start a new session.")
+                    set_status(status="")
+                    return
+                except RuntimeError as exc:
+                    log.error("send_message failed for user %s: %s", user_id, exc)
+                    say(f":warning: Could not deliver message: {exc}")
+                    set_status(status="")
+                    return
+
+                response_body = response or "_Leo didn't produce a response._"
+
+                if _HAS_CHUNKS:
+                    # Timeline mode: single thinking step then response.
+                    streamer = client.chat_stream(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        recipient_team_id=context.team_id,
+                        recipient_user_id=context.user_id,
+                        task_display_mode="timeline",
+                    )
+                    streamer.append(chunks=[
+                        TaskUpdateChunk(id="think", title="Leo is thinking...", status="in_progress"),
+                    ])
+                    streamer.append(chunks=[
+                        TaskUpdateChunk(id="think", title="Leo is thinking...", status="complete"),
+                    ])
+                    streamer.append(markdown_text=response_body)
+                    streamer.stop(blocks=_feedback_blocks())
+                else:
+                    streamer = client.chat_stream(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        recipient_team_id=context.team_id,
+                        recipient_user_id=context.user_id,
+                    )
+                    streamer.append(markdown_text=response_body)
+                    streamer.stop(blocks=_feedback_blocks())
+                return
+
+            # ── New session ──
+            set_status(status="Reading channel history...", loading_messages=[])
+
+            history_context = _read_channel_history(client, channel_id, limit=20)
+            if history_context:
+                enriched_message = f"{history_context}\n\n---\n\nUser's request:\n{text}"
+            else:
+                enriched_message = text
+
+            # Start the streamer early so we can show thinking steps.
+            if _HAS_CHUNKS:
+                streamer = client.chat_stream(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    recipient_team_id=context.team_id,
+                    recipient_user_id=context.user_id,
+                    task_display_mode="plan",
+                )
+                streamer.append(chunks=[
+                    PlanUpdateChunk(id="plan", title="Working on your request"),
+                    TaskUpdateChunk(id="sandbox", title="Setting up sandbox...", status="in_progress"),
+                    TaskUpdateChunk(id="worker", title="Leo is working", status="pending"),
+                    TaskUpdateChunk(id="response", title="Preparing response", status="pending"),
+                ])
+            else:
+                streamer = None
+                set_status(status="Spinning up sandbox...", loading_messages=[])
+
             try:
-                say("\u274c Something went wrong. Check the logs for details.", thread_ts=event_ts)
+                session, _is_new = session_manager.get_or_create_session(
+                    user_id, channel_id, enriched_message
+                )
+            except Exception as exc:
+                log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
+                if streamer is not None:
+                    streamer.append(chunks=[
+                        TaskUpdateChunk(id="sandbox", title="Setting up sandbox... failed", status="complete"),
+                    ])
+                    streamer.append(markdown_text=f":x: Could not start a session: {exc}")
+                    streamer.stop()
+                else:
+                    say(f":x: Could not start a session: {exc}")
+                    set_status(status="")
+                return
+
+            version = session.sandbox_version
+
+            # Sandbox ready -- update thinking steps.
+            if _HAS_CHUNKS and streamer is not None:
+                streamer.append(chunks=[
+                    TaskUpdateChunk(
+                        id="sandbox",
+                        title=f"Setting up sandbox (main@{version})",
+                        status="complete",
+                    ),
+                    TaskUpdateChunk(
+                        id="worker",
+                        title="Leo is working on your request...",
+                        status="in_progress",
+                    ),
+                ])
+            else:
+                set_status(status="Leo is working...", loading_messages=[])
+
+            # Retrieve first-turn response.
+            try:
+                response = session.worker.get_response()
+            except Exception as exc:
+                log.error("Could not get first-turn response: %s", exc, exc_info=True)
+                if _HAS_CHUNKS and streamer is not None:
+                    streamer.append(chunks=[
+                        TaskUpdateChunk(id="worker", title="Leo encountered an error", status="complete"),
+                        TaskUpdateChunk(id="response", title="Preparing response", status="complete"),
+                    ])
+                    streamer.append(
+                        markdown_text=f":warning: Session started (`main@{version}`) but could not read the response: {exc}",
+                    )
+                    streamer.stop()
+                else:
+                    say(f":warning: Session started (`main@{version}`) but could not read the response: {exc}")
+                    set_status(status="")
+                return
+
+            # Worker done -- prepare the response.
+            response_text = (
+                f":package: `main@{version}`\n\n{response}" if response
+                else "_Leo didn't produce a response._"
+            )
+
+            if _HAS_CHUNKS and streamer is not None:
+                streamer.append(chunks=[
+                    TaskUpdateChunk(id="worker", title="Leo finished", status="complete"),
+                    TaskUpdateChunk(id="response", title="Preparing response...", status="in_progress"),
+                ])
+                streamer.append(markdown_text=response_text)
+                streamer.append(chunks=[
+                    TaskUpdateChunk(id="response", title="Response ready", status="complete"),
+                ])
+                streamer.stop(blocks=_feedback_blocks())
+            else:
+                streamer = client.chat_stream(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    recipient_team_id=context.team_id,
+                    recipient_user_id=context.user_id,
+                )
+                streamer.append(markdown_text=response_text)
+                streamer.stop(blocks=_feedback_blocks())
+
+            # Set thread title on first message.
+            set_title(title=text[:50])
+
+        except Exception as e:
+            logger.exception(f"Failed to handle user message: {e}")
+            try:
+                say(f":warning: Something went wrong! ({e})")
+                set_status(status="")
             except Exception:
                 pass
 
+    app.use(assistant)
+
     # -- event: @Leo mention in a channel ------------------------------------
+    # The Assistant class does not handle channel @-mentions, so this
+    # stays as a separate event handler.
 
     @app.event("app_mention")
     def handle_mention(event, say, client):
@@ -575,14 +454,147 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
             say("Hey! Send me a message and I'll get to work.", thread_ts=event_ts)
             return
 
+        thread_ts = event_ts  # reply in a thread under the mention
+
         try:
-            _handle_user_message(user_id, channel_id, text, say, client, session_manager, event_ts=event_ts)
+            # Check for existing session (fast path).
+            existing = session_manager.get_session(user_id)
+
+            if existing is not None:
+                response = session_manager.send_message(existing, text)
+                response_body = response or "_Leo didn't produce a response._"
+
+                if _HAS_CHUNKS:
+                    streamer = client.chat_stream(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        task_display_mode="timeline",
+                    )
+                    streamer.append(chunks=[
+                        TaskUpdateChunk(id="think", title="Leo is thinking...", status="in_progress"),
+                    ])
+                    streamer.append(chunks=[
+                        TaskUpdateChunk(id="think", title="Leo is thinking...", status="complete"),
+                    ])
+                    streamer.append(markdown_text=response_body)
+                    streamer.stop(blocks=_feedback_blocks())
+                else:
+                    streamer = client.chat_stream(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                    )
+                    streamer.append(markdown_text=response_body)
+                    streamer.stop(blocks=_feedback_blocks())
+                return
+
+            # New session -- enrich with channel history.
+            history_context = _read_channel_history(client, channel_id, limit=20)
+            if history_context:
+                enriched_message = f"{history_context}\n\n---\n\nUser's request:\n{text}"
+            else:
+                enriched_message = text
+
+            if _HAS_CHUNKS:
+                streamer = client.chat_stream(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    task_display_mode="plan",
+                )
+                streamer.append(chunks=[
+                    PlanUpdateChunk(id="plan", title="Working on your request"),
+                    TaskUpdateChunk(id="sandbox", title="Setting up sandbox...", status="in_progress"),
+                    TaskUpdateChunk(id="worker", title="Leo is working", status="pending"),
+                    TaskUpdateChunk(id="response", title="Preparing response", status="pending"),
+                ])
+            else:
+                streamer = None
+
+            session, _is_new = session_manager.get_or_create_session(
+                user_id, channel_id, enriched_message
+            )
+            version = session.sandbox_version
+
+            if _HAS_CHUNKS and streamer is not None:
+                streamer.append(chunks=[
+                    TaskUpdateChunk(
+                        id="sandbox",
+                        title=f"Setting up sandbox (main@{version})",
+                        status="complete",
+                    ),
+                    TaskUpdateChunk(
+                        id="worker",
+                        title="Leo is working on your request...",
+                        status="in_progress",
+                    ),
+                ])
+
+            response = session.worker.get_response()
+            response_text = (
+                f":package: `main@{version}`\n\n{response}" if response
+                else "_Leo didn't produce a response._"
+            )
+
+            if _HAS_CHUNKS and streamer is not None:
+                streamer.append(chunks=[
+                    TaskUpdateChunk(id="worker", title="Leo finished", status="complete"),
+                    TaskUpdateChunk(id="response", title="Preparing response...", status="in_progress"),
+                ])
+                streamer.append(markdown_text=response_text)
+                streamer.append(chunks=[
+                    TaskUpdateChunk(id="response", title="Response ready", status="complete"),
+                ])
+                streamer.stop(blocks=_feedback_blocks())
+            else:
+                streamer = client.chat_stream(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                )
+                streamer.append(markdown_text=response_text)
+                streamer.stop(blocks=_feedback_blocks())
+
         except Exception:
             log.error("Unhandled error in mention handler:\n%s", traceback.format_exc())
             try:
                 say("\u274c Something went wrong. Check the logs for details.", thread_ts=event_ts)
             except Exception:
                 pass
+
+    # -- Feedback action handlers ----------------------------------------------
+
+    @app.action("feedback")
+    def handle_feedback(ack, body, client, logger):
+        """Handle thumbs-up / thumbs-down feedback button clicks."""
+        try:
+            ack()
+            message_ts = body["message"]["ts"]
+            channel_id = body["channel"]["id"]
+            user_id = body["user"]["id"]
+            feedback_value = body["actions"][0].get("value", "unknown")
+            is_positive = feedback_value == "good-feedback"
+
+            logger.info(
+                "Feedback received: user=%s value=%s message_ts=%s",
+                user_id,
+                feedback_value,
+                message_ts,
+            )
+
+            if is_positive:
+                client.chat_postEphemeral(
+                    channel=channel_id,
+                    user=user_id,
+                    thread_ts=message_ts,
+                    text="Thanks for the feedback!",
+                )
+            else:
+                client.chat_postEphemeral(
+                    channel=channel_id,
+                    user=user_id,
+                    thread_ts=message_ts,
+                    text="Sorry that wasn't helpful. Starting a new thread may improve results.",
+                )
+        except Exception:
+            logger.error("Failed to handle feedback action", exc_info=True)
 
     return app, session_manager
 
