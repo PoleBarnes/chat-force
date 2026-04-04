@@ -206,6 +206,8 @@ Key principles:
 
 Note: Browser automation uses agent-browser CLI (not MCP) because CLI is 16x more token-efficient than MCP-based browser tools.
 
+**Tool self-improvement:** Leo is NOT limited to pre-configured tools. Leo can discover, install, and use new tools at runtime (npm install, pip install, apt-get). The Mechanic evaluates whether tool additions should persist — if approved, the PR includes both the work output AND the environment changes (Dockerfile, requirements, config). Next container builds with the new tool permanently available. This is the self-improving loop applied to tooling, not just code.
+
 ## Delegation Pattern
 
 **You MUST act as an orchestrator.** Do NOT write code yourself. Delegate ALL implementation work to a team of specialized sub-agents. Your role is to:
