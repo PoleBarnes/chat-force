@@ -24,7 +24,6 @@ from pipeline.config import PipelineConfig
 from pipeline.main import _format_feedback, MAX_ITERATIONS
 from pipeline.mechanic_manager import MechanicManager
 from pipeline.pr_creator import PRCreator
-from pipeline.webhook_server import WebhookServer
 from pipeline.worker_manager import WorkerManager
 
 log = logging.getLogger(__name__)
@@ -105,10 +104,6 @@ class SessionManager:
         self._lock = threading.Lock()
         self._idle_checker: threading.Thread | None = None
         self._stop_event = threading.Event()
-
-        # Single webhook server shared across sessions (avoids port conflicts).
-        self._webhook = WebhookServer(config.webhook_host, config.webhook_port)
-        self._webhook_started = False
 
         # Optional callback invoked after a session is closed and the
         # Mechanic phase completes.  Signature: (session, result_dict) -> None
@@ -215,13 +210,7 @@ class SessionManager:
         try:
             run_id = session.run_id
             sandbox_version = _git_short_hash(run_id)
-
-            # Start the shared webhook server if this is the first session.
-            if not self._webhook_started:
-                self._webhook.start()
-                self._webhook_started = True
-
-            worker = WorkerManager(self.config, run_id, webhook=self._webhook)
+            worker = WorkerManager(self.config, run_id)
             container_id = worker.start(first_message)
 
             # Mark active before the potentially long wait so the idle
