@@ -45,26 +45,33 @@ Key principles:
 - Update `pipeline/config.py`: rename token env var, remove webhook fields, add Agent SDK fields
 - **Tests:** PipelineConfig instantiates with new defaults
 
-### Step 2: New Worker Dockerfile + Python entrypoint
+### Step 2: New Worker Dockerfile + Python entrypoint with hooks
 - New `worker/Dockerfile` based on `python:3.13-slim` + `pip install claude-agent-sdk`
 - New `worker/entrypoint.py` that calls `query()` with system prompt assembled from workspace files
+- Register Agent SDK hooks in entrypoint:
+  - `PostToolUse` — write every tool call + result to `/tmp/tool-log.jsonl` (ordered audit trail for Mechanic)
+  - `PreToolUse` — log tool call intent to `/tmp/tool-log.jsonl`
+  - `Stop` — write `/tmp/session-complete` sentinel file
 - Multi-turn via `/tmp/next-message.txt` polling, response to `/tmp/latest-response.txt`
-- **Tests:** Docker image builds, entrypoint starts with mocked SDK
+- **Tests:** Docker image builds, entrypoint starts with mocked SDK, hooks write to tool log
 
 ### Step 3: Update WorkerManager
 - Remove all webhook imports and code
-- `wait_for_completion()` uses `container.wait()` or sentinel file polling
+- `wait_for_completion()` polls for `/tmp/session-complete` sentinel (written by Stop hook)
 - `get_response()` reads plain text instead of OpenClaw JSON
+- `get_tool_log()` — NEW method: reads `/tmp/tool-log.jsonl` from container (ordered audit trail for Mechanic)
 - `send_message()` keeps docker cp mechanism (with chmod fix)
-- **Tests:** Update WorkerManager unit tests, mock Docker API
+- **Tests:** Update WorkerManager unit tests, mock Docker API, test tool log extraction
 
 ### Step 4: Rewrite MechanicManager
 - Remove all Docker container code
 - `evaluate()` calls `query()` on the host with Mechanic system prompt
 - Use structured output for verdict JSON (no more regex parsing)
-- Keep `_prepare_evaluation()` and `_validate_verdict()`
+- Include tool log (from Worker hooks) in the evaluation payload — Mechanic sees the ordered sequence of everything the agent did, not just the end-state diff
+- Keep `_prepare_evaluation()` — update it to include tool log data alongside git/docker diffs
+- Keep `_validate_verdict()`
 - Move Mechanic persona files to `config/mechanic/`
-- **Tests:** Mock `query()`, test verdict parsing
+- **Tests:** Mock `query()`, test verdict parsing, test tool log inclusion in evaluation
 
 ### Step 5: Delete response_parser.py + webhook_server.py
 - Remove files and all imports
