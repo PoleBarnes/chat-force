@@ -645,6 +645,52 @@ class TestValidateVerdict:
         assert result["reason"] == "explicit"
 
 
+class TestMechanicManagerSDK:
+    """Test MechanicManager Agent SDK integration (host-side query)."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    def test_evaluate_calls_query_with_changeset(self, config):
+        """evaluate() should call query() with the changeset and mechanic prompt."""
+        mm = MechanicManager(config, "test-run")
+
+        mock_verdict = {"verdict": "approve", "pr_title": "Add feature", "confidence": "high"}
+
+        with patch.object(mm, "_run_query", return_value=mock_verdict):
+            result = mm.evaluate({"task": "test task", "git_changes": {"diff": "+hello"}})
+
+        assert result["approved"] is True
+        assert result["pr_title"] == "Add feature"
+
+    def test_evaluate_includes_tool_log_in_payload(self, config):
+        """evaluate() should include tool_log in the evaluation payload."""
+        mm = MechanicManager(config, "test-run")
+
+        tool_log = [{"event": "PreToolUse", "tool_name": "Bash"}]
+        changeset = {"task": "test", "tool_log": tool_log, "git_changes": {}}
+
+        evaluation = mm._prepare_evaluation(changeset)
+        assert evaluation["tool_log"] == tool_log
+
+    def test_evaluate_includes_usage_in_payload(self, config):
+        """evaluate() should include usage data in the evaluation payload."""
+        mm = MechanicManager(config, "test-run")
+
+        usage = {"input_tokens": 1000, "output_tokens": 500, "total_cost_usd": 0.03}
+        changeset = {"task": "test", "usage": usage, "git_changes": {}}
+
+        evaluation = mm._prepare_evaluation(changeset)
+        assert evaluation["usage"] == usage
+
+    def test_no_docker_dependency(self, config):
+        """MechanicManager should NOT import or use Docker."""
+        mm = MechanicManager(config, "test-run")
+        assert not hasattr(mm, "_client")
+        assert not hasattr(mm, "_container")
+
+
 # =========================================================================
 # PRCreator tests
 # =========================================================================

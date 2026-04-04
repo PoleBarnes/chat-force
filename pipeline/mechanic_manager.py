@@ -1,135 +1,107 @@
-"""Docker container lifecycle management for the Mechanic (code reviewer)."""
+"""Host-side Mechanic evaluation via the Agent SDK."""
 
+import asyncio
 import json
 import logging
-import os
-import tempfile
-import time
-
-import docker
-from docker.errors import ImageNotFound, NotFound
 
 from pipeline.config import PipelineConfig
 
 log = logging.getLogger(__name__)
 
-# How often to poll for the verdict file inside the container (seconds)
-_POLL_INTERVAL = 5
+_DEFAULT_MECHANIC_SYSTEM_PROMPT = (
+    "You are the Mechanic — a code reviewer for the Digital Workforce Platform. "
+    "Evaluate the changeset and return a JSON verdict with these fields: verdict "
+    "(approve/reject), pr_title, confidence (high/medium/low), reason (if "
+    "rejecting), evaluation (summary of what you found)."
+)
 
 
 class MechanicManager:
-    """Starts the Mechanic container, feeds it a changeset, and collects its verdict."""
+    """Evaluates changesets with the Mechanic via the Agent SDK."""
 
     def __init__(self, config: PipelineConfig, run_id: str):
         self.config = config
         self.run_id = run_id
-        self._client = docker.from_env()
-        self._container = None
 
     # -- public API -----------------------------------------------------------
 
     def evaluate(self, changeset: dict) -> dict:
-        """Run the Mechanic on *changeset* and return the parsed verdict.
-
-        The changeset dict is serialised to a JSON file and bind-mounted into
-        the container at ``/changeset``.  The Mechanic writes its decision to
-        ``/output/verdict.json``.
-        """
-        self._ensure_image()
-
-        # Prepare a focused evaluation payload from the full changeset.
-        # The full changeset stays on disk for auditing; the Mechanic gets
-        # only what it needs to make a decision.
+        """Run the Mechanic on *changeset* and return the parsed verdict."""
         evaluation = self._prepare_evaluation(changeset)
-
-        changeset_dir = tempfile.mkdtemp(prefix="changeset-", dir=self.config.output_base)
-        changeset_path = os.path.join(changeset_dir, "changeset.json")
-        with open(changeset_path, "w") as f:
-            json.dump(evaluation, f, indent=2)
-
-        output_dir = tempfile.mkdtemp(prefix="mechanic-out-", dir=self.config.output_base)
-
-        env = {
-            "TASK_DESCRIPTION": changeset.get("task", ""),
-            "ANTHROPIC_AUTH_TOKEN": os.environ.get(
-                self.config.anthropic_token_env, ""
-            ),
-        }
-
-        self._container = self._client.containers.run(
-            image=self.config.mechanic_image,
-            name=f"mechanic-{self.run_id}",
-            environment=env,
-            volumes={
-                changeset_dir: {"bind": "/changeset", "mode": "ro"},
-                output_dir: {"bind": "/output", "mode": "rw"},
-            },
-            network=self.config.docker_network,
-            detach=True,
-        )
-        log.info(
-            "Mechanic container started: %s (%s)",
-            self._container.name,
-            self._container.id[:12],
-        )
-
-        verdict = self._wait_for_verdict(output_dir)
-        return verdict
+        changeset_json = json.dumps(evaluation, indent=2)
+        prompt = "Evaluate this changeset and return your verdict as JSON:\n\n" + changeset_json
+        verdict = self._run_query(prompt, changeset_json)
+        return self._validate_verdict(verdict)
 
     def cleanup(self) -> None:
-        """Remove the mechanic container."""
-        if self._container is None:
-            return
-        try:
-            self._container.remove(force=True)
-            log.info("Mechanic container removed: %s", self._container.name)
-        except NotFound:
-            log.debug("Mechanic container already removed")
+        pass
 
     # -- internals ------------------------------------------------------------
 
-    def _wait_for_verdict(self, output_dir: str) -> dict:
-        """Poll until ``verdict.json`` appears or timeout is reached."""
-        verdict_path = os.path.join(output_dir, "verdict.json")
-        deadline = time.monotonic() + self.config.mechanic_timeout
+    def _run_query(self, prompt: str, changeset_json: str) -> dict:
+        """Run a single Mechanic evaluation turn and parse the JSON verdict."""
+        from claude_agent_sdk import query
 
-        while time.monotonic() < deadline:
-            # Check if the container has exited unexpectedly
-            self._container.reload()
-            if self._container.status in ("exited", "dead"):
-                exit_code = self._container.attrs["State"]["ExitCode"]
-                if exit_code != 0:
-                    logs_tail = self._container.logs(tail=50).decode(errors="replace")
-                    log.error("Mechanic exited with code %d:\n%s", exit_code, logs_tail)
-                    raise RuntimeError(f"Mechanic exited with code {exit_code}")
+        async def _collect_result_text() -> str:
+            result_text = ""
+            assistant_text_parts: list[str] = []
 
-            # Check for verdict file on the host-mounted output dir
-            if os.path.exists(verdict_path):
-                with open(verdict_path) as f:
-                    verdict = json.load(f)
-                log.info("Verdict received: %s", verdict.get("verdict", verdict.get("approved", "unknown")))
-                return self._validate_verdict(verdict)
+            async for message in query(
+                prompt=prompt,
+                system_prompt=_DEFAULT_MECHANIC_SYSTEM_PROMPT,
+                max_turns=1,
+                permission_mode="plan",
+            ):
+                message_type = type(message).__name__
 
-            time.sleep(_POLL_INTERVAL)
+                if message_type == "AssistantMessage":
+                    content = getattr(message, "content", []) or []
+                    for block in content:
+                        if getattr(block, "type", None) == "text":
+                            text = getattr(block, "text", None)
+                            if isinstance(text, str) and text:
+                                assistant_text_parts.append(text)
+                    continue
 
-        raise TimeoutError(
-            f"Mechanic did not produce a verdict within {self.config.mechanic_timeout}s"
-        )
+                if message_type == "ResultMessage":
+                    text = getattr(message, "result", None)
+                    if isinstance(text, str) and text:
+                        result_text = text
 
-    def _ensure_image(self) -> None:
-        """Build the Mechanic image if it doesn't exist locally."""
+            return result_text or "".join(assistant_text_parts)
+
         try:
-            self._client.images.get(self.config.mechanic_image)
-            log.debug("Mechanic image found: %s", self.config.mechanic_image)
-        except ImageNotFound:
-            log.info("Mechanic image not found, building %s ...", self.config.mechanic_image)
-            self._client.images.build(
-                path=".",
-                dockerfile="mechanic/Dockerfile",
-                tag=self.config.mechanic_image,
-                rm=True,
+            asyncio.get_running_loop()
+        except RuntimeError:
+            result_text = asyncio.run(_collect_result_text())
+        else:
+            import threading
+
+            runner_result: dict[str, str] = {}
+            runner_error: list[BaseException] = []
+
+            def _thread_runner() -> None:
+                try:
+                    runner_result["text"] = asyncio.run(_collect_result_text())
+                except BaseException as exc:  # pragma: no cover - defensive thread handoff
+                    runner_error.append(exc)
+
+            thread = threading.Thread(target=_thread_runner)
+            thread.start()
+            thread.join()
+            if runner_error:
+                raise runner_error[0]
+            result_text = runner_result.get("text", "")
+
+        try:
+            return json.loads(result_text)
+        except (TypeError, json.JSONDecodeError):
+            log.warning(
+                "Mechanic verdict was not valid JSON for run %s (payload size=%d chars)",
+                self.run_id,
+                len(changeset_json),
             )
-            log.info("Mechanic image built: %s", self.config.mechanic_image)
+            return {"approved": False, "reason": "Failed to parse verdict"}
 
     @staticmethod
     def _prepare_evaluation(changeset: dict) -> dict:
@@ -233,6 +205,9 @@ class MechanicManager:
             "docker_changes_summary": docker_summary,
             "telemetry": telemetry_summary,
             "output_files": output_summary,
+            "tool_log": changeset.get("tool_log", []),
+            "usage": changeset.get("usage", {}),
+            "memory_changes": changeset.get("memory_changes", []),
         }
 
     @staticmethod
