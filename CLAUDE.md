@@ -1,15 +1,23 @@
 # Project Rules
 
-## Bug Fix Regression Tests (Mandatory)
+## Test-Driven Development (Mandatory)
 
-Every bug fix MUST include a corresponding regression test in `tests/test_pipeline.py` before the fix is considered complete. The test must:
+**Write the test FIRST, then fix the code.** This applies to all bug fixes and new features.
 
-1. Reproduce the exact failure scenario that was found
-2. Fail without the fix applied (conceptually — verify the test targets the right code path)
-3. Pass with the fix applied
-4. Be named descriptively: `test_<component>_<bug_description>`
+For bug fixes:
+1. Write a test in `tests/test_pipeline.py` that reproduces the exact failure
+2. Run the test — confirm it FAILS (proves the test catches the bug)
+3. Fix the code
+4. Run the test — confirm it PASSES
+5. Name the test descriptively: `test_<component>_<bug_description>`
 
-No bug fix PR or commit is complete without its regression test. This is non-negotiable.
+For new features:
+1. Write tests that define the expected behavior
+2. Run them — confirm they fail (feature doesn't exist yet)
+3. Implement the feature
+4. Run them — confirm they pass
+
+No code change is complete without its test. This is non-negotiable.
 
 ## Testing
 
