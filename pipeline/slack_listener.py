@@ -508,8 +508,65 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
     # processing, preventing Bolt warnings about unhandled message events.
 
     @app.event("message")
-    def handle_other_messages(event, logger):
-        logger.debug("Ignoring non-assistant message event in channel %s", event.get("channel"))
+    def handle_other_messages(event, say, client, logger):
+        # Skip bot messages and subtypes to prevent loops.
+        if event.get("bot_id") or event.get("subtype"):
+            logger.debug("Ignoring bot/subtype message in channel %s", event.get("channel"))
+            return
+
+        thread_ts = event.get("thread_ts")
+        ts = event.get("ts")
+
+        # Only process thread replies (thread_ts present and different from ts).
+        if not thread_ts or thread_ts == ts:
+            logger.debug("Ignoring non-thread message event in channel %s", event.get("channel"))
+            return
+
+        user_id = event.get("user")
+        text = event.get("text", "")
+        channel_id = event.get("channel")
+
+        if not user_id or not text.strip():
+            return
+
+        # Check if the user has an active session.
+        session = session_manager.get_session(user_id)
+        if session is None:
+            logger.debug(
+                "Thread reply from %s in %s but no active session — ignoring",
+                user_id,
+                channel_id,
+            )
+            return
+
+        # Route the thread reply to the session manager.
+        logger.info("Routing thread reply from %s to active session", user_id)
+
+        try:
+            response = session_manager.send_message(session, text)
+        except TimeoutError:
+            say(":hourglass: Timed out waiting for Leo. Try again.", thread_ts=thread_ts)
+            return
+        except RuntimeError as exc:
+            log.error("send_message failed for thread reply from %s: %s", user_id, exc)
+            say(f":warning: Could not deliver message: {exc}", thread_ts=thread_ts)
+            return
+
+        response_body = response or "_Leo didn't produce a response._"
+
+        try:
+            streamer = client.chat_stream(
+                channel=channel_id,
+                thread_ts=thread_ts,
+                recipient_team_id=_get_team_id(client),
+                recipient_user_id=user_id,
+            )
+            streamer.append(markdown_text=response_body)
+            streamer.stop(blocks=_feedback_blocks())
+        except Exception:
+            # Fallback: post as a plain message if streaming fails.
+            log.warning("chat_stream failed for thread reply, falling back to say()", exc_info=True)
+            say(response_body, thread_ts=thread_ts)
 
     # -- event: @Leo mention in a channel ------------------------------------
     # The Assistant class does not handle channel @-mentions, so this

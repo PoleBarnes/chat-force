@@ -2168,3 +2168,189 @@ class TestWorkerManager:
         wm.cleanup()
 
         webhook.unregister.assert_called_once_with(container_id)
+
+
+# =========================================================================
+# Thread reply routing tests (catch-all handler)
+# =========================================================================
+
+
+class TestThreadReplyRouting:
+    """Test that thread replies in @mention threads are routed to the session manager.
+
+    When a user @mentions Leo in a channel, Leo responds in a thread.
+    Subsequent replies in that thread (without @mentioning) should be routed
+    to the session manager if the user has an active session, not silently dropped.
+    """
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    @pytest.fixture
+    def app_harness(self, tmp_path):
+        """Create an app via create_app with mocked internals, capturing handlers."""
+        from pipeline.slack_listener import create_app
+
+        session_manager = MagicMock()
+        client = MagicMock()
+        streamer = MagicMock()
+        client.chat_stream.return_value = streamer
+
+        handlers = {}
+
+        mock_app_instance = MagicMock()
+
+        def capture_event(event_type):
+            def decorator(fn):
+                handlers[event_type] = fn
+                return fn
+            return decorator
+
+        mock_app_instance.event = capture_event
+        mock_app_instance.use = MagicMock()
+        mock_app_instance.action = lambda action_id: lambda fn: fn
+        mock_app_instance.client = client
+
+        with patch("pipeline.slack_listener.SessionManager", return_value=session_manager), \
+             patch("pipeline.slack_listener.App", return_value=mock_app_instance), \
+             patch("pipeline.slack_listener._get_team_id", return_value="T_TEST"), \
+             patch("pipeline.slack_listener._HAS_CHUNKS", False), \
+             patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-fake-token"}):
+            config = PipelineConfig(output_base=str(tmp_path))
+            app, sm = create_app(config)
+
+        return {
+            "handlers": handlers,
+            "session_manager": session_manager,
+            "client": client,
+            "streamer": streamer,
+        }
+
+    def test_thread_reply_with_active_session_routes_to_session_manager(self, app_harness):
+        """A thread reply from a user with an active session should call send_message."""
+        h = app_harness
+        mock_session = MagicMock()
+        h["session_manager"].get_session.return_value = mock_session
+        h["session_manager"].send_message.return_value = "Leo's reply"
+
+        event = {
+            "type": "message",
+            "user": "U_HUMAN",
+            "text": "Follow-up question",
+            "channel": "C_CHANNEL",
+            "ts": "1111.2222",
+            "thread_ts": "1111.0000",
+        }
+
+        handler = h["handlers"]["message"]
+        handler(event=event, say=MagicMock(), client=h["client"], logger=MagicMock())
+
+        h["session_manager"].get_session.assert_called_with("U_HUMAN")
+        h["session_manager"].send_message.assert_called_with(mock_session, "Follow-up question")
+
+        # Verify response was streamed back into the thread
+        h["client"].chat_stream.assert_called_once()
+        call_kwargs = h["client"].chat_stream.call_args[1]
+        assert call_kwargs["channel"] == "C_CHANNEL"
+        assert call_kwargs["thread_ts"] == "1111.0000"
+        h["streamer"].append.assert_called()
+        h["streamer"].stop.assert_called()
+
+    def test_thread_reply_without_active_session_is_ignored(self, app_harness):
+        """A thread reply from a user with NO active session should be silently ignored."""
+        h = app_harness
+        h["session_manager"].get_session.return_value = None
+
+        event = {
+            "type": "message",
+            "user": "U_NOBODY",
+            "text": "Some reply",
+            "channel": "C_CHANNEL",
+            "ts": "2222.3333",
+            "thread_ts": "2222.0000",
+        }
+
+        handler = h["handlers"]["message"]
+        handler(event=event, say=MagicMock(), client=h["client"], logger=MagicMock())
+
+        h["session_manager"].get_session.assert_called_with("U_NOBODY")
+        h["session_manager"].send_message.assert_not_called()
+        h["client"].chat_stream.assert_not_called()
+
+    def test_non_thread_message_is_ignored(self, app_harness):
+        """A top-level channel message (not a thread reply) should be silently ignored."""
+        h = app_harness
+
+        event = {
+            "type": "message",
+            "user": "U_SOMEONE",
+            "text": "Hello channel",
+            "channel": "C_CHANNEL",
+            "ts": "3333.4444",
+        }
+
+        handler = h["handlers"]["message"]
+        handler(event=event, say=MagicMock(), client=h["client"], logger=MagicMock())
+
+        h["session_manager"].get_session.assert_not_called()
+        h["session_manager"].send_message.assert_not_called()
+        h["client"].chat_stream.assert_not_called()
+
+    def test_bot_message_is_skipped(self, app_harness):
+        """Messages with bot_id should be skipped to prevent loops."""
+        h = app_harness
+
+        event = {
+            "type": "message",
+            "bot_id": "B_LEO",
+            "text": "I am a bot",
+            "channel": "C_CHANNEL",
+            "ts": "4444.5555",
+            "thread_ts": "4444.0000",
+        }
+
+        handler = h["handlers"]["message"]
+        handler(event=event, say=MagicMock(), client=h["client"], logger=MagicMock())
+
+        h["session_manager"].get_session.assert_not_called()
+        h["session_manager"].send_message.assert_not_called()
+
+    def test_subtype_message_is_skipped(self, app_harness):
+        """Messages with a subtype (e.g. 'message_changed') should be skipped."""
+        h = app_harness
+
+        event = {
+            "type": "message",
+            "subtype": "message_changed",
+            "user": "U_HUMAN",
+            "text": "Edited text",
+            "channel": "C_CHANNEL",
+            "ts": "5555.6666",
+            "thread_ts": "5555.0000",
+        }
+
+        handler = h["handlers"]["message"]
+        handler(event=event, say=MagicMock(), client=h["client"], logger=MagicMock())
+
+        h["session_manager"].get_session.assert_not_called()
+        h["session_manager"].send_message.assert_not_called()
+
+    def test_thread_reply_where_ts_equals_thread_ts_is_ignored(self, app_harness):
+        """A message where ts == thread_ts is the parent message, not a reply."""
+        h = app_harness
+
+        event = {
+            "type": "message",
+            "user": "U_HUMAN",
+            "text": "I am the parent",
+            "channel": "C_CHANNEL",
+            "ts": "6666.0000",
+            "thread_ts": "6666.0000",
+        }
+
+        handler = h["handlers"]["message"]
+        handler(event=event, say=MagicMock(), client=h["client"], logger=MagicMock())
+
+        h["session_manager"].get_session.assert_not_called()
+        h["session_manager"].send_message.assert_not_called()
