@@ -572,7 +572,7 @@ class TestPRCreatorDeletedFiles:
 
         commands_run = []
 
-        def fake_run(cmd, *, cwd=None, check=True):
+        def fake_run(cmd, *, cwd=None, check=True, env=None):
             commands_run.append(cmd)
             if cmd[0] == "git" and cmd[1] == "clone":
                 # Copy our repo instead of cloning
@@ -585,8 +585,9 @@ class TestPRCreatorDeletedFiles:
                 return "https://github.com/test/pr/1"
             return original_run(cmd, cwd=cwd, check=check)
 
-        with patch("pipeline.pr_creator._run", side_effect=fake_run):
-            pr.create(changeset, verdict)
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "ghp_test"}):
+            with patch("pipeline.pr_creator._run", side_effect=fake_run):
+                pr.create(changeset, verdict)
 
         # Verify git rm was called for the deleted file
         rm_commands = [c for c in commands_run if c[0] == "git" and c[1] == "rm"]
@@ -2855,3 +2856,92 @@ class TestVerdictSchema:
             assert criterion in eval_props
             assert "pass" in eval_props[criterion]["properties"]
             assert "notes" in eval_props[criterion]["properties"]
+
+
+# =========================================================================
+# Phase 4: GitHub token wiring tests
+# =========================================================================
+
+
+class TestPRCreatorAuth:
+    """Test GITHUB_TOKEN authentication in PRCreator."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return PipelineConfig(output_base=str(tmp_path))
+
+    def test_create_raises_without_github_token(self, config):
+        """create() should raise RuntimeError when GITHUB_TOKEN is missing."""
+        pr = PRCreator(config, "test-run")
+        changeset = {"git_changes": {"file_contents": {"a.py": "x=1"}}}
+        verdict = {"pr_title": "Test", "pr_body": "Body", "files_to_include": ["a.py"]}
+
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(RuntimeError, match="Missing.*GITHUB_TOKEN"):
+                pr.create(changeset, verdict)
+
+    def test_create_uses_authenticated_clone_url(self, config):
+        """create() should inject token into HTTPS clone URL."""
+        pr = PRCreator(config, "test-run")
+        changeset = {
+            "git_changes": {"file_contents": {"a.py": "x=1"}},
+            "worker_container": None,
+        }
+        verdict = {"pr_title": "Test", "pr_body": "Body", "files_to_include": ["a.py"]}
+
+        commands = []
+
+        def capture_run(cmd, *, cwd=None, check=True, env=None):
+            commands.append({"cmd": cmd, "env": env})
+            if cmd[0] == "git" and cmd[1] == "clone":
+                # Create the temp dir so subsequent commands work
+                import shutil
+                os.makedirs(cmd[-1], exist_ok=True)
+                subprocess.run(["git", "init"], cwd=cmd[-1], capture_output=True)
+                subprocess.run(["git", "config", "user.name", "test"], cwd=cmd[-1], capture_output=True)
+                subprocess.run(["git", "config", "user.email", "t@t"], cwd=cmd[-1], capture_output=True)
+                return ""
+            if cmd[0] == "git" and cmd[1] == "status":
+                return "M a.py"
+            if cmd[0] == "gh":
+                return "https://github.com/test/pr/1"
+            return ""
+
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "ghp_test123"}):
+            with patch("pipeline.pr_creator._run", side_effect=capture_run):
+                pr.create(changeset, verdict)
+
+        clone_cmd = next(c for c in commands if c["cmd"][1] == "clone")
+        assert "ghp_test123@github.com" in clone_cmd["cmd"][-2]  # URL has token
+
+    def test_create_passes_gh_token_to_gh_cli(self, config):
+        """create() should set GH_TOKEN env for gh pr create."""
+        pr = PRCreator(config, "test-run")
+        changeset = {
+            "git_changes": {"file_contents": {"a.py": "x=1"}},
+            "worker_container": None,
+        }
+        verdict = {"pr_title": "Test", "pr_body": "Body", "files_to_include": ["a.py"]}
+
+        commands = []
+
+        def capture_run(cmd, *, cwd=None, check=True, env=None):
+            commands.append({"cmd": cmd, "env": env})
+            if cmd[0] == "git" and cmd[1] == "clone":
+                os.makedirs(cmd[-1], exist_ok=True)
+                subprocess.run(["git", "init"], cwd=cmd[-1], capture_output=True)
+                subprocess.run(["git", "config", "user.name", "t"], cwd=cmd[-1], capture_output=True)
+                subprocess.run(["git", "config", "user.email", "t@t"], cwd=cmd[-1], capture_output=True)
+                return ""
+            if cmd[0] == "git" and cmd[1] == "status":
+                return "M a.py"
+            if cmd[0] == "gh":
+                return "https://github.com/test/pr/1"
+            return ""
+
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "ghp_test123"}):
+            with patch("pipeline.pr_creator._run", side_effect=capture_run):
+                pr.create(changeset, verdict)
+
+        gh_cmd = next(c for c in commands if c["cmd"][0] == "gh")
+        assert gh_cmd["env"]["GH_TOKEN"] == "ghp_test123"

@@ -21,7 +21,7 @@ def _slugify(text: str, max_len: int = 60) -> str:
     return slug[:max_len].rstrip("-")
 
 
-def _run(cmd: list[str], *, cwd: str | None = None, check: bool = True) -> str:
+def _run(cmd: list[str], *, cwd: str | None = None, check: bool = True, env: dict | None = None) -> str:
     """Run a subprocess and return stripped stdout. Raises on failure."""
     log.debug("$ %s", " ".join(cmd))
     result = subprocess.run(
@@ -31,6 +31,7 @@ def _run(cmd: list[str], *, cwd: str | None = None, check: bool = True) -> str:
         text=True,
         timeout=120,
         check=False,
+        env=env,
     )
     if check and result.returncode != 0:
         raise RuntimeError(
@@ -64,15 +65,30 @@ class PRCreator:
         if not files_to_include:
             raise ValueError("Verdict has no files_to_include -- nothing to PR")
 
+        # Authenticate with GitHub
+        github_token = os.environ.get(self.config.github_token_env, "")
+        if not github_token:
+            raise RuntimeError(
+                f"Missing {self.config.github_token_env} environment variable — "
+                "cannot authenticate to GitHub for PR creation"
+            )
+
         branch = self._make_branch_name(pr_title)
         file_contents = changeset.get("git_changes", {}).get("file_contents", {})
         container_id = changeset.get("worker_container")
         tmp_dir = tempfile.mkdtemp(prefix=f"pr-{self.run_id}-")
 
+        # Build authenticated clone URL and env for gh CLI
+        repo_url = self.config.config_repo_url
+        if repo_url.startswith("https://") and "@" not in repo_url:
+            repo_url = repo_url.replace("https://", f"https://{github_token}@")
+
+        git_env = os.environ.copy()
+        git_env["GH_TOKEN"] = github_token
+
         try:
             # 1. Clone the repo into a temp directory
-            repo_url = self.config.config_repo_url
-            log.info("[%s] Cloning %s into temp dir", self.run_id, repo_url)
+            log.info("[%s] Cloning into temp dir", self.run_id)
             _run(["git", "clone", "--depth=1", repo_url, tmp_dir])
 
             # 2. Create and checkout the branch
@@ -106,7 +122,7 @@ class PRCreator:
                 ],
                 cwd=tmp_dir,
             )
-            _run(["git", "push", "-u", "origin", branch], cwd=tmp_dir)
+            _run(["git", "push", "-u", "origin", branch], cwd=tmp_dir, env=git_env)
 
             # 5. Create the PR via gh
             log.info("[%s] Creating PR: %s", self.run_id, pr_title)
@@ -120,6 +136,7 @@ class PRCreator:
                     "--body", pr_body,
                 ],
                 cwd=tmp_dir,
+                env=git_env,
             )
 
             log.info("[%s] PR created: %s", self.run_id, pr_url)
