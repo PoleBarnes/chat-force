@@ -190,7 +190,9 @@ Key principles:
 
 **Use `ClaudeSDKClient`, NOT bare `query()`** — The stateful client supports multi-turn, hooks, permissions, MCP management, and interrupts. Bare `query()` is one-shot only.
 
-**Computer use is NOT available** — The Agent SDK wraps Claude Code CLI which provides developer tools (Bash, Read, Write, etc.) but NOT computer use (screenshot, mouse, keyboard). Computer use requires the raw Anthropic Messages API with the computer-use beta. If we need computer use later, we add a separate Messages API path for those specific tasks.
+**Computer use deferred** — The Agent SDK doesn't include computer use (screenshot, mouse, keyboard). That requires the raw Messages API. But Playwright MCP covers 95%+ of Leo's needs (web browsing, form filling, screenshots, data extraction). For visual verification: Playwright takes a screenshot, we send it to Claude via Messages API vision. Computer use only needed for non-web desktop apps — add later if needed via a separate Messages API codepath.
+
+**Leo is an MCP CLIENT, not a server** — Leo connects to MCP servers (Playwright, GitHub, etc.) as tools. There's no need for Leo to expose itself as an MCP server.
 
 **Memory works through CLAUDE.md files** — Not a separate memory tool. Set `setting_sources=["project"]` to load `.claude/` project settings including memory.
 
