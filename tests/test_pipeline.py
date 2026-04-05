@@ -2098,7 +2098,7 @@ class TestThreadReplyRouting:
 
         event = {
             "type": "message",
-            "bot_id": "B_LEO",
+            "bot_id": "B_TESTBOT",
             "text": "I am a bot",
             "channel": "C_CHANNEL",
             "ts": "4444.5555",
@@ -2159,31 +2159,39 @@ class TestThreadReplyRouting:
 class TestWorkerEntrypoint:
     """Test worker/entrypoint.py functions for the Agent SDK worker."""
 
-    def test_build_system_prompt_includes_workspace_files(self, tmp_path):
-        """System prompt should combine SOUL.md, IDENTITY.md, USER.md, AGENTS.md."""
+    def test_build_system_prompt_includes_identity_files(self, tmp_path):
+        """System prompt should combine harness identity files in order."""
         from worker.entrypoint import build_system_prompt
 
-        (tmp_path / "SOUL.md").write_text("You are Leo.")
-        (tmp_path / "IDENTITY.md").write_text("Name: Leo")
-        (tmp_path / "USER.md").write_text("Name: Travis")
-        (tmp_path / "AGENTS.md").write_text("Session startup rules")
+        identity_dir = tmp_path / "identity"
+        identity_dir.mkdir()
+        (identity_dir / "mission.md").write_text("Mission stub.")
+        (identity_dir / "brand.md").write_text("Brand stub.")
+        (identity_dir / "avatar.md").write_text("Avatar stub.")
+        (identity_dir / "never-list.md").write_text("Never stub.")
+        (identity_dir / "bot-persona.md").write_text("Persona stub.")
 
         prompt = build_system_prompt(str(tmp_path))
 
-        assert "You are Leo." in prompt
-        assert "Name: Leo" in prompt
-        assert "Name: Travis" in prompt
-        assert "Session startup rules" in prompt
+        assert prompt == (
+            "# MISSION\nMission stub.\n\n"
+            "# BRAND\nBrand stub.\n\n"
+            "# AVATAR\nAvatar stub.\n\n"
+            "# NEVER\nNever stub.\n\n"
+            "# PERSONA\nPersona stub.\n\n"
+        )
 
     def test_build_system_prompt_handles_missing_files(self, tmp_path):
-        """System prompt should not crash if some workspace files are missing."""
+        """System prompt should not crash if some identity files are missing."""
         from worker.entrypoint import build_system_prompt
 
-        (tmp_path / "SOUL.md").write_text("You are Leo.")
-        # IDENTITY.md, USER.md, AGENTS.md intentionally missing
+        identity_dir = tmp_path / "identity"
+        identity_dir.mkdir()
+        (identity_dir / "mission.md").write_text("Mission stub.")
+        # Other identity files intentionally missing
 
         prompt = build_system_prompt(str(tmp_path))
-        assert "You are Leo." in prompt
+        assert prompt == "# MISSION\nMission stub.\n\n"
 
     def test_pre_tool_use_hook_logs_to_tool_log(self, tmp_path):
         """PreToolUse hook should append a JSON line to the tool log."""
@@ -2716,11 +2724,16 @@ class TestEntrypointHelpers:
     def test_build_system_prompt_format(self, tmp_path):
         """build_system_prompt should format with # headers."""
         from worker.entrypoint import build_system_prompt
-        (tmp_path / "SOUL.md").write_text("Be helpful.")
-        (tmp_path / "IDENTITY.md").write_text("Name: Leo")
+
+        identity_dir = tmp_path / "identity"
+        identity_dir.mkdir()
+        (identity_dir / "mission.md").write_text("Mission stub.")
+        (identity_dir / "brand.md").write_text("Brand stub.")
+
         prompt = build_system_prompt(str(tmp_path))
-        assert prompt.startswith("# SOUL\n")
-        assert "# IDENTITY\n" in prompt
+
+        assert prompt.startswith("# MISSION\n")
+        assert "# BRAND\n" in prompt
 
     def test_build_client_options_reads_env_vars(self):
         """_build_client_options should read MAX_TURNS and MAX_BUDGET_USD from env."""

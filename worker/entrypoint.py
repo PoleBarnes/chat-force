@@ -1,12 +1,13 @@
 import asyncio
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 
-WORKSPACE_CWD = "/workspace/config"
+WORKER_CWD = os.environ.get("WORKER_CWD", "/harness")
 LATEST_RESPONSE_PATH = Path("/tmp/latest-response.txt")
 NEXT_MESSAGE_PATH = Path("/tmp/next-message.txt")
 TOOL_LOG_PATH = "/tmp/tool-log.jsonl"
@@ -14,17 +15,32 @@ SENTINEL_PATH = "/tmp/session-complete"
 USAGE_PATH = "/tmp/usage.json"
 
 
-def build_system_prompt(workspace_dir: str) -> str:
-    sections = []
-    workspace_path = Path(workspace_dir)
+def build_system_prompt(harness_dir: str) -> str:
+    """Assemble the Worker's system prompt from the harness identity files.
 
-    for name in ("SOUL", "IDENTITY", "USER", "AGENTS"):
-        file_path = workspace_path / f"{name}.md"
+    Reads /harness/identity/{mission,brand,avatar,never-list,bot-persona}.md
+    (or their equivalents at harness_dir) and concatenates them under the
+    section headings MISSION, BRAND, AVATAR, NEVER, PERSONA. Missing files
+    are skipped silently — HarnessLoader validation already guarantees they
+    exist for any production run, but tests may construct partial harnesses.
+    """
+    sections = []
+    identity_dir = Path(harness_dir) / "identity"
+    file_header_pairs = (
+        ("mission.md", "MISSION"),
+        ("brand.md", "BRAND"),
+        ("avatar.md", "AVATAR"),
+        ("never-list.md", "NEVER"),
+        ("bot-persona.md", "PERSONA"),
+    )
+
+    for filename, header in file_header_pairs:
+        file_path = identity_dir / filename
         if not file_path.exists():
             continue
 
         content = file_path.read_text(encoding="utf-8").rstrip()
-        sections.append(f"# {name}\n{content}\n\n")
+        sections.append(f"# {header}\n{content}\n\n")
 
     return "".join(sections)
 
@@ -93,6 +109,69 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _require_env_int(name: str) -> int:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        raise RuntimeError(
+            f"Required env var missing: {name} "
+            f"(must be set by WorkerManager from harness limits)"
+        )
+    return int(value)
+
+
+def _require_env_float(name: str) -> float:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        raise RuntimeError(
+            f"Required env var missing: {name} "
+            f"(must be set by WorkerManager from harness limits)"
+        )
+    return float(value)
+
+
+def _ensure_git_baseline(cwd: str) -> None:
+    """Initialize the worker cwd as a git repo with a baseline commit."""
+    cwd_path = Path(cwd)
+    git_dir = cwd_path / ".git"
+    if git_dir.exists():
+        return
+
+    git_env = os.environ.copy()
+    home = git_env.get("HOME")
+    if not home or not Path(home).exists() or not os.access(home, os.W_OK):
+        git_env["HOME"] = str(cwd_path)
+
+    subprocess.run(["git", "init"], cwd=cwd, check=True, capture_output=True, env=git_env)
+    subprocess.run(
+        ["git", "config", "user.name", "worker"],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        env=git_env,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "worker@local"],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        env=git_env,
+    )
+    subprocess.run(
+        ["git", "config", "--global", "--add", "safe.directory", cwd],
+        check=True,
+        capture_output=True,
+        env=git_env,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=cwd, check=True, capture_output=True, env=git_env)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline", "--allow-empty"],
+        cwd=cwd,
+        check=False,
+        capture_output=True,
+        env=git_env,
+    )
+
+
 def _extract_text_blocks(message) -> str:
     parts = []
     for block in getattr(message, "content", []) or []:
@@ -157,15 +236,15 @@ def _build_client_options(
     options_kwargs = {
         "system_prompt": system_prompt,
         "permission_mode": "bypassPermissions",
-        "max_turns": int(os.environ.get("MAX_TURNS", "50")),
-        "max_budget_usd": float(os.environ.get("MAX_BUDGET_USD", "5.0")),
+        "max_turns": _require_env_int("MAX_TURNS"),
+        "max_budget_usd": _require_env_float("MAX_BUDGET_USD"),
         "allowed_tools": (
             os.environ.get("ALLOWED_TOOLS", "").split(",")
             if os.environ.get("ALLOWED_TOOLS")
             else None
         ),
         "hooks": hooks,
-        "cwd": WORKSPACE_CWD,
+        "cwd": WORKER_CWD,
     }
 
     if ClaudeAgentOptions is not None:
@@ -187,8 +266,10 @@ async def _main() -> None:
     if not task_instruction:
         raise SystemExit("TASK_INSTRUCTION env var is required")
 
-    workspace_dir = os.environ.get("WORKSPACE_DIR", WORKSPACE_CWD)
-    system_prompt = build_system_prompt(workspace_dir)
+    idle_timeout = _require_env_int("IDLE_TIMEOUT")
+    _ensure_git_baseline(WORKER_CWD)
+
+    system_prompt = build_system_prompt(WORKER_CWD)
     usage_tracker = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -202,7 +283,6 @@ async def _main() -> None:
         HookMatcher,
     )
 
-    idle_timeout = int(os.environ.get("IDLE_TIMEOUT", "600"))
     loop = asyncio.get_event_loop()
     last_activity = loop.time()
 
