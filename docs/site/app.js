@@ -11,6 +11,7 @@ mermaid.initialize({
 const routes = {
   'home':                    { file: null, title: 'Overview', render: renderHome },
   'claude-md':               { file: '/CLAUDE.md', title: 'Project Rules' },
+  'requirements':            { file: '/REQUIREMENTS.md', title: 'Requirements & Definition of Done' },
   'factory-blueprint':       { file: '/factory-blueprint.md', title: 'Factory Blueprint' },
   'architecture':            { file: '/docs/architecture.md', title: 'Architecture — System Views' },
   'harness-schema':          { file: '/docs/harness-schema.md', title: 'Harness Schema' },
@@ -169,6 +170,7 @@ function renderHome() {
         <p>Recommended order if this is your first time:</p>
         <ol>
           <li><a href="#claude-md">Project Rules (CLAUDE.md)</a> — the non-negotiables, every agent reads this first</li>
+          <li><a href="#requirements">Requirements &amp; DoD</a> — what "done" looks like at product, feature, and capability scales</li>
           <li><a href="#factory-blueprint">Factory Blueprint</a> — the product vision (vibe code up front, mechanic in the back)</li>
           <li><a href="#architecture">Architecture — 4 system views</a> — see the shape of things</li>
           <li><a href="#harness-schema">Harness Schema</a> — the per-customer harness contract</li>

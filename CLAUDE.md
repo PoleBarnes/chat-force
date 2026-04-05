@@ -1,12 +1,13 @@
 # Project Rules
 
-This is the single file every agent (and every human) reads at the start of a session. It contains the non-negotiable rules. For the full picture of the system — mission, architecture, harness schema, templates — read these in order:
+This is the single file every agent (and every human) reads at the start of a session. It contains the non-negotiable rules. For the full picture of the system — mission, architecture, harness schema, templates, definition of done — read these in order:
 
-1. [`factory-blueprint.md`](factory-blueprint.md) — the product vision (vibe code up front, mechanic in the back)
-2. [`docs/architecture.md`](docs/architecture.md) — the four system views with diagrams
-3. [`docs/harness-schema.md`](docs/harness-schema.md) — the per-customer harness contract
-4. [`docs/templates/`](docs/templates/) — Slack manifest template + vault starter
-5. [`docs/claude-agent-sdk-deep-dive.md`](docs/claude-agent-sdk-deep-dive.md) — Agent SDK reference
+1. [`REQUIREMENTS.md`](REQUIREMENTS.md) — the definition of done (product, feature, non-negotiable capabilities)
+2. [`factory-blueprint.md`](factory-blueprint.md) — the product vision (vibe code up front, mechanic in the back)
+3. [`docs/architecture.md`](docs/architecture.md) — the four system views with diagrams
+4. [`docs/harness-schema.md`](docs/harness-schema.md) — the per-customer harness contract
+5. [`docs/templates/`](docs/templates/) — Slack manifest template + vault starter
+6. [`docs/claude-agent-sdk-deep-dive.md`](docs/claude-agent-sdk-deep-dive.md) — Agent SDK reference
 
 ---
 
