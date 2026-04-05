@@ -3,7 +3,7 @@
 Runs from the HOST, reaching into the container via docker exec / docker cp.
 Assembles a JSON changeset bundle across four layers:
 
-  1. Git diff    -- config/skill file changes in /workspace/config
+  1. Git diff    -- config/skill file changes in /harness
   2. Docker diff -- filesystem changes visible to the Docker storage driver
   3. Telemetry   -- exit code, timestamps, container logs
   4. Agent SDK   -- tool log (JSONL), usage data, response text
@@ -37,6 +37,7 @@ NOISE_PATTERNS = [
 
 # How many log lines to capture from the container.
 _LOG_TAIL_LINES = 500
+WORKER_CWD = "/harness"
 
 
 def _is_noise(path: str) -> bool:
@@ -103,16 +104,16 @@ class ChangesetExtractor:
         }
 
         try:
-            result["diff"] = self._exec(container, "cd /workspace/config && git diff")
-            result["status"] = self._exec(container, "cd /workspace/config && git status --porcelain")
+            result["diff"] = self._exec(container, f"cd {WORKER_CWD} && git diff")
+            result["status"] = self._exec(container, f"cd {WORKER_CWD} && git status --porcelain")
 
             untracked_raw = self._exec(
                 container,
-                "cd /workspace/config && git ls-files --others --exclude-standard",
+                f"cd {WORKER_CWD} && git ls-files --others --exclude-standard",
             )
             changed_raw = self._exec(
                 container,
-                "cd /workspace/config && git diff --name-only",
+                f"cd {WORKER_CWD} && git diff --name-only",
             )
 
             # Parse file lists
@@ -132,7 +133,7 @@ class ChangesetExtractor:
                 try:
                     content = self._exec(
                         container,
-                        f"cat /workspace/config/{fpath}",
+                        f"cat {WORKER_CWD}/{fpath}",
                     )
                     result["file_contents"][fpath] = content
                 except Exception:

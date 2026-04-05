@@ -114,7 +114,7 @@ class MechanicManager:
         """Run the Mechanic on *changeset* and return the parsed verdict."""
         evaluation = self._prepare_evaluation(changeset)
         changeset_json = json.dumps(evaluation, indent=2)
-        prompt = "Evaluate this changeset and return your verdict as JSON:\n\n" + changeset_json
+        prompt = self._build_evaluation_prompt(changeset_json)
         verdict = self._run_query(prompt, changeset_json)
         return self._validate_verdict(verdict)
 
@@ -226,7 +226,7 @@ class MechanicManager:
                 categories["node_modules"] = categories.get("node_modules", 0) + 1
             elif "/.cache/" in path or "/.npm/" in path:
                 categories["caches"] = categories.get("caches", 0) + 1
-            elif "/workspace/config/" in path:
+            elif "/harness/" in path:
                 significant_paths.append(path)
             else:
                 categories["other"] = categories.get("other", 0) + 1
@@ -312,6 +312,34 @@ class MechanicManager:
             result["previous_rejections"] = previous
 
         return result
+
+    def _build_evaluation_prompt(self, changeset_json: str) -> str:
+        """Build the Mechanic prompt, including harness eval criteria when available."""
+        if self.config.harness is None:
+            return "Evaluate this changeset and return your verdict as JSON:\n\n" + changeset_json
+
+        criteria = self.config.harness.eval_criteria
+        parts = [
+            "# Customer Eval Criteria",
+            criteria.narrative.strip(),
+            "",
+            "## Checklist",
+        ]
+
+        if criteria.checks:
+            for check in criteria.checks:
+                parts.append(f"- {check.id}: {check.description}")
+        else:
+            parts.append("- No additional checklist items provided.")
+
+        parts.extend(
+            [
+                "",
+                "# Changeset",
+                changeset_json,
+            ]
+        )
+        return "\n".join(parts)
 
     @staticmethod
     def _validate_verdict(verdict: dict) -> dict:

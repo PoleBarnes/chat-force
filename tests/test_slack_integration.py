@@ -306,11 +306,11 @@ def mock_session_manager():
 
 
 @pytest.fixture()
-def app_and_sm(web_client, mock_session_manager):
+def app_and_sm(web_client, mock_session_manager, config_with_harness):
     """Create a Bolt App wired to the mock session manager.
 
-    Instead of calling create_app() (which needs real env vars and
-    constructs its own App), we replicate the handler registration
+    Instead of calling create_app() against the live Slack API, we replicate
+    the handler registration
     using an App(client=web_client) -- the same pattern Bolt's own
     test suite uses.  The mock session_manager is injected directly.
     """
@@ -331,7 +331,10 @@ def app_and_sm(web_client, mock_session_manager):
         # We monkey-patch the module-level reference that create_app's
         # closures capture by re-importing create_app with patches.
         with patch.object(sl, "SessionManager", return_value=mock_session_manager):
-            with patch.dict("os.environ", {"SLACK_BOT_TOKEN": "xoxb-valid"}):
+            with patch.dict(
+                "os.environ",
+                {config_with_harness.harness.bot_token_env: "xoxb-valid"},
+            ):
                 # We need create_app to register handlers on *our* app,
                 # so patch App() to return our pre-built app.
                 original_app_init = App.__init__
@@ -344,7 +347,7 @@ def app_and_sm(web_client, mock_session_manager):
                     return original_app_init(self_app, client=web_client)
 
                 with patch.object(App, "__init__", patched_init):
-                    app, _ = sl.create_app(PipelineConfig())
+                    app, _ = sl.create_app(config_with_harness)
 
         yield app, mock_session_manager
     finally:

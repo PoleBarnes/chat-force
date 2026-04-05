@@ -18,7 +18,6 @@ import pytest
 import docker as docker_mod
 from docker.errors import DockerException
 
-from pipeline.config import PipelineConfig
 from pipeline.worker_manager import WorkerManager
 
 
@@ -102,7 +101,9 @@ def nonroot_worker_container():
             pass
 
 
-def test_send_message_readable_by_non_root_user(tmp_path, nonroot_worker_container):
+def test_send_message_readable_by_non_root_user(
+    config_with_harness, nonroot_worker_container
+):
     """send_message() must write a file that a non-root container user can read.
 
     REGRESSION TEST: We previously had a bug where `docker cp` wrote
@@ -112,8 +113,7 @@ def test_send_message_readable_by_non_root_user(tmp_path, nonroot_worker_contain
     to read the file, crashing the session on every follow-up turn.
     """
     container = nonroot_worker_container
-    config = PipelineConfig(output_base=str(tmp_path))
-    wm = WorkerManager(config, "regression-test")
+    wm = WorkerManager(config_with_harness, "regression-test")
     wm._container = container
 
     wm.send_message("hello from the orchestrator")
@@ -140,7 +140,7 @@ def test_send_message_readable_by_non_root_user(tmp_path, nonroot_worker_contain
     )
 
 
-def test_send_message_clears_sentinel(tmp_path, nonroot_worker_container):
+def test_send_message_clears_sentinel(config_with_harness, nonroot_worker_container):
     """send_message() must clear /tmp/session-complete before writing
     the next message, otherwise wait_for_completion() returns instantly
     on subsequent turns.
@@ -151,8 +151,7 @@ def test_send_message_clears_sentinel(tmp_path, nonroot_worker_container):
     assert container.exec_run(["touch", "/tmp/session-complete"]).exit_code == 0
     assert container.exec_run(["test", "-f", "/tmp/session-complete"]).exit_code == 0
 
-    config = PipelineConfig(output_base=str(tmp_path))
-    wm = WorkerManager(config, "regression-test")
+    wm = WorkerManager(config_with_harness, "regression-test")
     wm._container = container
 
     wm.send_message("follow-up message")

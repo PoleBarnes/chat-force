@@ -1,4 +1,4 @@
-"""Pipeline orchestrator — CLI entry point for the self-improving loop.
+"""Pipeline orchestrator for the self-improving loop.
 
 Usage:
     uv run --python 3.13 --with docker,slack_sdk python -m pipeline.main --task "Refactor the auth module"
@@ -13,6 +13,7 @@ import sys
 from datetime import datetime, timezone
 
 from pipeline.config import PipelineConfig
+from pipeline.harness_loader import HarnessLoader, HarnessValidationError
 from pipeline.worker_manager import WorkerManager
 from pipeline.mechanic_manager import MechanicManager
 from pipeline.changeset_extractor import ChangesetExtractor
@@ -211,6 +212,11 @@ def main():
     )
     parser.add_argument("--task", required=True, help="Task instruction for the Worker agent")
     parser.add_argument("--output-base", default=None, help="Override output directory")
+    parser.add_argument(
+        "--harness-path",
+        default=None,
+        help="Path to the harness directory. Falls back to HARNESS_PATH.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -221,6 +227,13 @@ def main():
     config = PipelineConfig()
     if args.output_base:
         config.output_base = args.output_base
+
+    try:
+        harness_path = HarnessLoader.resolve_path(cli_flag=args.harness_path)
+        config.harness = HarnessLoader.load(harness_path)
+    except HarnessValidationError as exc:
+        log.critical("%s", exc)
+        sys.exit(1)
 
     summary = run_pipeline(args.task, config)
 

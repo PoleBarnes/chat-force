@@ -22,7 +22,12 @@ class SlackHandler:
         if not reply_channel:
             return
 
-        token = os.environ.get(config.slack_token_env)
+        token_env = (
+            config.harness.bot_token_env
+            if config.harness is not None
+            else config.slack_token_env
+        )
+        token = os.environ.get(token_env)
         if not token:
             return
 

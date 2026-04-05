@@ -1,4 +1,4 @@
-"""Docker container lifecycle management for the Worker (Leo/Agent SDK)."""
+"""Docker container lifecycle management for the Worker container."""
 
 import json
 import logging
@@ -40,6 +40,14 @@ class WorkerManager:
 
     def start(self, task: str) -> str:
         """Launch the Worker container. Returns the container ID."""
+        if self.config.harness is None:
+            raise RuntimeError("WorkerManager requires config.harness to be set")
+
+        limits = self.config.harness.workspace.limits
+        volumes = {
+            str(self.config.harness.harness_path): {"bind": "/harness", "mode": "rw"},
+        }
+
         self._ensure_network()
         self._ensure_image()
 
@@ -49,12 +57,17 @@ class WorkerManager:
                 self.config.claude_code_token_env, ""
             ),
             "ALLOWED_TOOLS": ",".join(self.config.allowed_tools),
+            "MAX_TURNS": str(limits.max_turns_per_session),
+            "MAX_BUDGET_USD": str(limits.max_budget_usd_per_session),
+            "IDLE_TIMEOUT": str(limits.session_idle_timeout_seconds),
+            "WORKER_CWD": "/harness",
         }
 
         self._container = self._client.containers.run(
             image=self.config.worker_image,
             name=f"worker-{self.run_id}",
             environment=env,
+            volumes=volumes,
             network=self.config.docker_network,
             detach=True,
         )
@@ -69,7 +82,8 @@ class WorkerManager:
         if self._container is None:
             raise RuntimeError("Worker container not running")
 
-        deadline = time.monotonic() + self.config.worker_timeout
+        timeout_seconds = self.config.harness.workspace.limits.worker_timeout_seconds
+        deadline = time.monotonic() + timeout_seconds
         last_status = "unknown"
 
         while time.monotonic() < deadline:
@@ -99,7 +113,7 @@ class WorkerManager:
             time.sleep(2)
 
         raise TimeoutError(
-            f"Worker did not complete within {self.config.worker_timeout}s "
+            f"Worker did not complete within {timeout_seconds}s "
             f"(container status: {last_status})"
         )
 
@@ -284,33 +298,11 @@ class WorkerManager:
     # -- internals ------------------------------------------------------------
 
     def _ensure_image(self) -> None:
-        """Build the Worker image if it doesn't exist or code has changed.
-
-        Tags each build with the current git HEAD hash. On subsequent
-        calls, if the hash-tagged image already exists the build is
-        skipped. After a merge to main (new hash), the image is
-        automatically rebuilt — this is the ratchet mechanism.
-        """
-        git_hash = self._git_head_hash()
-        version_tag = f"{self.config.worker_image}-{git_hash}" if git_hash else ""
-
-        # Check if an image for this exact commit already exists.
-        if version_tag:
-            try:
-                self._client.images.get(version_tag)
-                log.debug("Worker image up to date: %s", version_tag)
-                return
-            except ImageNotFound:
-                pass
-
-        # Fall back to checking if the base image exists at all.
+        """Build the Worker image if it doesn't exist locally."""
         try:
             self._client.images.get(self.config.worker_image)
-            if not version_tag:
-                log.debug("Worker image found (no git hash): %s", self.config.worker_image)
-                return
-            # Base image exists but is stale (wrong hash).
-            log.info("Worker image stale, rebuilding for %s ...", git_hash)
+            log.debug("Worker image up to date: %s", self.config.worker_image)
+            return
         except ImageNotFound:
             log.info("Worker image not found, building %s ...", self.config.worker_image)
 
@@ -320,20 +312,4 @@ class WorkerManager:
             tag=self.config.worker_image,
             rm=True,
         )
-        # Also tag with the git hash so the next call skips the build.
-        if version_tag:
-            image = self._client.images.get(self.config.worker_image)
-            image.tag(version_tag)
-        log.info("Worker image built: %s (%s)", self.config.worker_image, git_hash or "no hash")
-
-    @staticmethod
-    def _git_head_hash() -> str:
-        """Return the short hash of HEAD, or empty string on failure."""
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                capture_output=True, text=True, timeout=10, check=True,
-            )
-            return result.stdout.strip()
-        except Exception:
-            return ""
+        log.info("Worker image built: %s", self.config.worker_image)

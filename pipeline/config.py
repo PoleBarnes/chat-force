@@ -1,7 +1,19 @@
-"""Pipeline configuration -- all tunables live here."""
+"""Pipeline configuration -- all tunables live here.
+
+Customer-specific configuration (bot name, tokens, limits, identity content,
+eval criteria, git identity) does NOT live here. It lives in a
+`LoadedHarness` snapshot that is loaded at startup by `HarnessLoader` and
+attached to this config via the `harness` field. Engine-global tunables
+(Docker runtime, retry tuning, engine self-improvement PR routing) stay
+here.
+"""
 
 import os
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pipeline.harness_loader import LoadedHarness
 
 
 @dataclass
@@ -47,6 +59,13 @@ class PipelineConfig:
             "TodoWrite",
         ]
     )
+
+    # Customer-scoped config loaded at startup by HarnessLoader. Optional at
+    # construction time so unit tests that exercise engine-global defaults
+    # can instantiate PipelineConfig() without a harness; production entry
+    # points must set this before creating any manager that touches
+    # customer-specific state.
+    harness: "LoadedHarness | None" = None
 
     def __post_init__(self):
         os.makedirs(self.output_base, exist_ok=True)

@@ -1,7 +1,7 @@
-"""Slack socket-mode listener for Leo.
+"""Slack socket-mode listener for a chat-force bot.
 
 Connects to Slack, routes messages to the session manager,
-and posts Leo's responses back to channels.
+and posts the bot's responses back to channels.
 
 Usage::
 
@@ -30,6 +30,7 @@ from slack_sdk.models.blocks import (
 )
 
 from pipeline.config import PipelineConfig
+from pipeline.harness_loader import HarnessLoader, HarnessValidationError
 from pipeline.session_manager import Session, SessionManager
 
 # Thinking-step chunk types -- available in slack_sdk >= 3.41.
@@ -210,7 +211,25 @@ def _get_team_id(client) -> str:
 def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
     """Create and configure the Slack Bolt app and session manager."""
 
-    app = App(token=os.environ["SLACK_BOT_TOKEN"])
+    if config.harness is None:
+        raise RuntimeError(
+            "create_app requires a PipelineConfig with a loaded harness. "
+            "Set config.harness via HarnessLoader.load() before calling."
+        )
+    bot_name = config.harness.bot_name
+    thinking_status = f"{bot_name} is thinking..."
+    working_status = f"{bot_name} is working..."
+    working_request_status = f"{bot_name} is working on your request..."
+    finished_status = f"{bot_name} finished"
+    error_status = f"{bot_name} encountered an error"
+    empty_response_text = f"_{bot_name} didn't produce a response._"
+    timeout_new_session_text = (
+        f":hourglass: Timed out waiting for {bot_name}. "
+        "Try again or start a new session."
+    )
+    timeout_text = f":hourglass: Timed out waiting for {bot_name}. Try again."
+
+    app = App(token=os.environ[config.harness.bot_token_env])
     session_manager = SessionManager(config)
 
     # Wire up the session-close callback so Mechanic results reach Slack.
@@ -223,24 +242,23 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
     @assistant.thread_started
     def handle_thread_started(say: Say, set_suggested_prompts: SetSuggestedPrompts, logger):
         try:
-            say("Hey! I'm Leo \u2014 your digital worker. Tell me what you need and I'll spin up a sandbox to get it done. \U0001f935")
+            say(f"Hey! I'm {bot_name} \u2014 tell me what you need and I'll get to work.")
             set_suggested_prompts(
                 prompts=[
                     {
-                        "title": "Build something",
-                        "message": "Create a new Express.js REST API with SQLite persistence and tests",
+                        "title": "Help me plan a task",
+                        "message": (
+                            "I have a task I'd like your help planning. "
+                            "Ask me questions to understand what I need."
+                        ),
                     },
                     {
-                        "title": "Create a video ad",
-                        "message": "Use Remotion to create a 15-second Facebook video ad for my product",
+                        "title": "Draft a short update",
+                        "message": "Help me draft a short update I can share with my team.",
                     },
                     {
-                        "title": "Research a tool",
-                        "message": "Research Remotion and create a skill file documenting how to use it",
-                    },
-                    {
-                        "title": "Write a scraper",
-                        "message": "Build a Python web scraper that extracts data from a website",
+                        "title": "Ask me what you need",
+                        "message": "What information do you need from me to do your best work?",
                     },
                 ]
             )
@@ -277,12 +295,12 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
 
             if existing is not None:
                 # ── Follow-up message in existing session ──
-                set_status(status="Leo is thinking...", loading_messages=[])
+                set_status(status=thinking_status, loading_messages=[])
 
                 try:
                     response = session_manager.send_message(existing, text)
                 except TimeoutError:
-                    say(":hourglass: Timed out waiting for Leo. Try again or start a new session.")
+                    say(timeout_new_session_text)
                     set_status(status="")
                     return
                 except RuntimeError as exc:
@@ -291,7 +309,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                     set_status(status="")
                     return
 
-                response_body = response or "_Leo didn't produce a response._"
+                response_body = response or empty_response_text
 
                 if _HAS_CHUNKS:
                     # Timeline mode: single thinking step then response.
@@ -303,10 +321,10 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                         task_display_mode="timeline",
                     )
                     streamer.append(chunks=[
-                        TaskUpdateChunk(id="think", title="Leo is thinking...", status="in_progress"),
+                        TaskUpdateChunk(id="think", title=thinking_status, status="in_progress"),
                     ])
                     streamer.append(chunks=[
-                        TaskUpdateChunk(id="think", title="Leo is thinking...", status="complete"),
+                        TaskUpdateChunk(id="think", title=thinking_status, status="complete"),
                     ])
                     streamer.append(markdown_text=response_body)
                     streamer.stop(blocks=_feedback_blocks())
@@ -342,7 +360,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 streamer.append(chunks=[
                     PlanUpdateChunk(id="plan", title="Working on your request"),
                     TaskUpdateChunk(id="sandbox", title="Setting up sandbox...", status="in_progress"),
-                    TaskUpdateChunk(id="worker", title="Leo is working", status="pending"),
+                    TaskUpdateChunk(id="worker", title=working_status, status="pending"),
                     TaskUpdateChunk(id="response", title="Preparing response", status="pending"),
                 ])
             else:
@@ -371,7 +389,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 if streamer is not None:
                     streamer.append(chunks=[
                         TaskUpdateChunk(id="sandbox", title="Using existing session", status="complete"),
-                        TaskUpdateChunk(id="worker", title="Leo is thinking...", status="in_progress"),
+                        TaskUpdateChunk(id="worker", title=thinking_status, status="in_progress"),
                     ])
 
                 try:
@@ -382,10 +400,10 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                             TaskUpdateChunk(id="worker", title="Timed out", status="complete"),
                             TaskUpdateChunk(id="response", title="Preparing response", status="complete"),
                         ])
-                        streamer.append(markdown_text=":hourglass: Timed out waiting for Leo. Try again or start a new session.")
+                        streamer.append(markdown_text=timeout_new_session_text)
                         streamer.stop()
                     else:
-                        say(":hourglass: Timed out waiting for Leo. Try again or start a new session.")
+                        say(timeout_new_session_text)
                         set_status(status="")
                     return
                 except RuntimeError as exc:
@@ -402,11 +420,11 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                         set_status(status="")
                     return
 
-                response_body = response or "_Leo didn't produce a response._"
+                response_body = response or empty_response_text
 
                 if streamer is not None:
                     streamer.append(chunks=[
-                        TaskUpdateChunk(id="worker", title="Leo finished", status="complete"),
+                        TaskUpdateChunk(id="worker", title=finished_status, status="complete"),
                         TaskUpdateChunk(id="response", title="Response ready", status="complete"),
                     ])
                     streamer.append(markdown_text=response_body)
@@ -434,12 +452,12 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                     ),
                     TaskUpdateChunk(
                         id="worker",
-                        title="Leo is working on your request...",
+                        title=working_request_status,
                         status="in_progress",
                     ),
                 ])
             else:
-                set_status(status="Leo is working...", loading_messages=[])
+                set_status(status=working_status, loading_messages=[])
 
             # Retrieve first-turn response.
             try:
@@ -448,7 +466,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 log.error("Could not get first-turn response: %s", exc, exc_info=True)
                 if _HAS_CHUNKS and streamer is not None:
                     streamer.append(chunks=[
-                        TaskUpdateChunk(id="worker", title="Leo encountered an error", status="complete"),
+                        TaskUpdateChunk(id="worker", title=error_status, status="complete"),
                         TaskUpdateChunk(id="response", title="Preparing response", status="complete"),
                     ])
                     streamer.append(
@@ -463,12 +481,12 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
             # Worker done -- prepare the response.
             response_text = (
                 f":package: `main@{version}`\n\n{response}" if response
-                else "_Leo didn't produce a response._"
+                else empty_response_text
             )
 
             if _HAS_CHUNKS and streamer is not None:
                 streamer.append(chunks=[
-                    TaskUpdateChunk(id="worker", title="Leo finished", status="complete"),
+                    TaskUpdateChunk(id="worker", title=finished_status, status="complete"),
                     TaskUpdateChunk(id="response", title="Preparing response...", status="in_progress"),
                 ])
                 streamer.append(markdown_text=response_text)
@@ -545,14 +563,14 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         try:
             response = session_manager.send_message(session, text)
         except TimeoutError:
-            say(":hourglass: Timed out waiting for Leo. Try again.", thread_ts=thread_ts)
+            say(timeout_text, thread_ts=thread_ts)
             return
         except RuntimeError as exc:
             log.error("send_message failed for thread reply from %s: %s", user_id, exc)
             say(f":warning: Could not deliver message: {exc}", thread_ts=thread_ts)
             return
 
-        response_body = response or "_Leo didn't produce a response._"
+        response_body = response or empty_response_text
 
         try:
             streamer = client.chat_stream(
@@ -568,7 +586,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
             log.warning("chat_stream failed for thread reply, falling back to say()", exc_info=True)
             say(response_body, thread_ts=thread_ts)
 
-    # -- event: @Leo mention in a channel ------------------------------------
+    # -- event: @bot mention in a channel ------------------------------------
     # The Assistant class does not handle channel @-mentions, so this
     # stays as a separate event handler.
 
@@ -604,7 +622,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                         task_display_mode="timeline",
                     )
                     streamer.append(chunks=[
-                        TaskUpdateChunk(id="think", title="Leo is thinking...", status="in_progress"),
+                        TaskUpdateChunk(id="think", title=thinking_status, status="in_progress"),
                     ])
                 else:
                     streamer = None
@@ -616,10 +634,10 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                         streamer.append(chunks=[
                             TaskUpdateChunk(id="think", title="Timed out", status="complete"),
                         ])
-                        streamer.append(markdown_text=":hourglass: Timed out waiting for Leo. Try again or start a new session.")
+                        streamer.append(markdown_text=timeout_new_session_text)
                         streamer.stop()
                     else:
-                        say(":hourglass: Timed out waiting for Leo. Try again or start a new session.", thread_ts=event_ts)
+                        say(timeout_new_session_text, thread_ts=event_ts)
                     return
                 except RuntimeError as exc:
                     log.error("send_message failed for user %s: %s", user_id, exc)
@@ -633,11 +651,11 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                         say(f":warning: Could not deliver message: {exc}", thread_ts=event_ts)
                     return
 
-                response_body = response or "_Leo didn't produce a response._"
+                response_body = response or empty_response_text
 
                 if streamer is not None:
                     streamer.append(chunks=[
-                        TaskUpdateChunk(id="think", title="Leo is thinking...", status="complete"),
+                        TaskUpdateChunk(id="think", title=thinking_status, status="complete"),
                     ])
                     streamer.append(markdown_text=response_body)
                     streamer.stop(blocks=_feedback_blocks())
@@ -670,7 +688,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 streamer.append(chunks=[
                     PlanUpdateChunk(id="plan", title="Working on your request"),
                     TaskUpdateChunk(id="sandbox", title="Setting up sandbox...", status="in_progress"),
-                    TaskUpdateChunk(id="worker", title="Leo is working", status="pending"),
+                    TaskUpdateChunk(id="worker", title=working_status, status="pending"),
                     TaskUpdateChunk(id="response", title="Preparing response", status="pending"),
                 ])
             else:
@@ -697,7 +715,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 if streamer is not None:
                     streamer.append(chunks=[
                         TaskUpdateChunk(id="sandbox", title="Using existing session", status="complete"),
-                        TaskUpdateChunk(id="worker", title="Leo is thinking...", status="in_progress"),
+                        TaskUpdateChunk(id="worker", title=thinking_status, status="in_progress"),
                     ])
 
                 try:
@@ -708,10 +726,10 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                             TaskUpdateChunk(id="worker", title="Timed out", status="complete"),
                             TaskUpdateChunk(id="response", title="Preparing response", status="complete"),
                         ])
-                        streamer.append(markdown_text=":hourglass: Timed out waiting for Leo. Try again or start a new session.")
+                        streamer.append(markdown_text=timeout_new_session_text)
                         streamer.stop()
                     else:
-                        say(":hourglass: Timed out waiting for Leo. Try again or start a new session.", thread_ts=event_ts)
+                        say(timeout_new_session_text, thread_ts=event_ts)
                     return
                 except RuntimeError as exc:
                     log.error("send_message failed for user %s: %s", user_id, exc)
@@ -726,11 +744,11 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                         say(f":warning: Could not deliver message: {exc}", thread_ts=event_ts)
                     return
 
-                response_body = response or "_Leo didn't produce a response._"
+                response_body = response or empty_response_text
 
                 if streamer is not None:
                     streamer.append(chunks=[
-                        TaskUpdateChunk(id="worker", title="Leo finished", status="complete"),
+                        TaskUpdateChunk(id="worker", title=finished_status, status="complete"),
                         TaskUpdateChunk(id="response", title="Response ready", status="complete"),
                     ])
                     streamer.append(markdown_text=response_body)
@@ -757,7 +775,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                     ),
                     TaskUpdateChunk(
                         id="worker",
-                        title="Leo is working on your request...",
+                        title=working_request_status,
                         status="in_progress",
                     ),
                 ])
@@ -768,7 +786,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 log.error("Could not get first-turn response: %s", exc, exc_info=True)
                 if _HAS_CHUNKS and streamer is not None:
                     streamer.append(chunks=[
-                        TaskUpdateChunk(id="worker", title="Leo encountered an error", status="complete"),
+                        TaskUpdateChunk(id="worker", title=error_status, status="complete"),
                         TaskUpdateChunk(id="response", title="Preparing response", status="complete"),
                     ])
                     streamer.append(
@@ -784,12 +802,12 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
 
             response_text = (
                 f":package: `main@{version}`\n\n{response}" if response
-                else "_Leo didn't produce a response._"
+                else empty_response_text
             )
 
             if _HAS_CHUNKS and streamer is not None:
                 streamer.append(chunks=[
-                    TaskUpdateChunk(id="worker", title="Leo finished", status="complete"),
+                    TaskUpdateChunk(id="worker", title=finished_status, status="complete"),
                     TaskUpdateChunk(id="response", title="Preparing response...", status="in_progress"),
                 ])
                 streamer.append(markdown_text=response_text)
@@ -866,13 +884,15 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    # Validate required env vars early.
-    for var in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"):
-        if not os.environ.get(var):
-            log.critical("Missing required environment variable: %s", var)
-            sys.exit(1)
+    try:
+        loaded = HarnessLoader.load(HarnessLoader.resolve_path())
+    except HarnessValidationError as exc:
+        log.critical("%s", exc)
+        sys.exit(1)
 
-    config = PipelineConfig()
+    config = PipelineConfig(harness=loaded)
+    bot_token = os.environ[config.harness.bot_token_env]
+    app_token = os.environ[config.harness.app_token_env]
     app, session_manager = create_app(config)
 
     # -- graceful shutdown ---------------------------------------------------
@@ -891,7 +911,7 @@ def main() -> None:
     session_manager.start()
     log.info("Slack listener starting in socket mode")
 
-    handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
+    handler = SocketModeHandler(app, app_token)
     handler.start()  # blocks
 
 

@@ -3,7 +3,7 @@
 A session binds a Slack user to a single long-lived Worker container.
 Messages flow into the container via WorkerManager.send_message(); the
 container stays alive until the conversation goes idle for
-`config.session_idle_timeout` seconds.  When the session closes, the
+the configured session idle timeout. When the session closes, the
 Mechanic evaluates the changeset and a PR is created if approved.
 
 Thread-safe: multiple Slack messages can arrive concurrently.
@@ -517,6 +517,8 @@ class SessionManager:
     @property
     def _idle_timeout(self) -> int:
         """Session idle timeout in seconds, with fallback."""
+        if self.config.harness is not None:
+            return self.config.harness.workspace.limits.session_idle_timeout_seconds
         return getattr(self.config, "session_idle_timeout", 600)
 
     def _cleanup_session(self, session: Session) -> None:

@@ -115,13 +115,22 @@ class PRCreator:
             if not status:
                 raise RuntimeError("No changes staged after copying files -- nothing to commit")
 
-            _run(
-                [
-                    "git", "commit",
-                    "-m", f"{pr_title}\n\nRun: {self.run_id}\n\nAutomated by chat-force pipeline.",
-                ],
-                cwd=tmp_dir,
-            )
+            commit_cmd = [
+                "git",
+                "commit",
+                "-m",
+                f"{pr_title}\n\nRun: {self.run_id}\n\nAutomated by chat-force pipeline.",
+            ]
+            if self.config.harness is not None:
+                git_identity = self.config.harness.workspace.git
+                commit_cmd[1:1] = [
+                    "-c",
+                    f"user.name={git_identity.user_name}",
+                    "-c",
+                    f"user.email={git_identity.user_email}",
+                ]
+
+            _run(commit_cmd, cwd=tmp_dir)
             _run(["git", "push", "-u", "origin", branch], cwd=tmp_dir, env=git_env)
 
             # 5. Create the PR via gh
@@ -178,7 +187,7 @@ class PRCreator:
         # Fallback: docker cp from the worker container
         if container_id:
             log.info("File %s not in bundle -- falling back to docker cp", fpath)
-            src = f"{container_id}:/workspace/config/{fpath}"
+            src = f"{container_id}:/harness/{fpath}"
             try:
                 _run(["docker", "cp", src, dest])
                 return

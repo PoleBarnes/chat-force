@@ -145,7 +145,7 @@ class TestIsNoise:
         assert _is_noise("/workspace/.git/objects/abc") is True
 
     def test_workspace_file_is_not_noise(self):
-        assert _is_noise("/workspace/config/skills/my-skill.yaml") is False
+        assert _is_noise("/harness/skills/my-skill.yaml") is False
 
     def test_app_file_is_not_noise(self):
         assert _is_noise("/home/node/app/index.js") is False
@@ -171,7 +171,7 @@ class TestChangesetExtractor:
 
         # diff returns list of Docker diff entries
         container.diff.return_value = [
-            {"Path": "/workspace/config/skills/new.yaml", "Kind": 1},
+            {"Path": "/harness/skills/new.yaml", "Kind": 1},
             {"Path": "/tmp/something", "Kind": 1},
         ]
 
@@ -233,8 +233,8 @@ class TestChangesetExtractor:
         bundle = extractor.extract("fake-container-id")
 
         docker_changes = bundle["docker_changes"]
-        # /workspace/config/skills/new.yaml (Kind=1) should be in added
-        assert "/workspace/config/skills/new.yaml" in docker_changes["added"]
+        # /harness/skills/new.yaml (Kind=1) should be in added
+        assert "/harness/skills/new.yaml" in docker_changes["added"]
         # /tmp/something should be filtered to noise
         assert "/tmp/something" in docker_changes["filtered_noise"]
         assert "/tmp/something" not in docker_changes["added"]
@@ -394,6 +394,29 @@ class TestMechanicManagerSDK:
 
         assert result["approved"] is True
         assert result["pr_title"] == "Add feature"
+
+    def test_evaluate_includes_harness_eval_criteria(self, config_with_harness):
+        """evaluate() should prepend harness narrative and checks when available."""
+        mm = MechanicManager(config_with_harness, "test-run")
+
+        with patch.object(mm, "_run_query", return_value={"verdict": "approve"}) as mock_run:
+            mm.evaluate({"task": "test task", "git_changes": {"diff": "+hello"}})
+
+        prompt = mock_run.call_args[0][0]
+        assert "# Customer Eval Criteria" in prompt
+        assert config_with_harness.harness.eval_criteria.narrative in prompt
+        assert "## Checklist" in prompt
+
+    def test_evaluate_skips_harness_eval_criteria_without_harness(self, config):
+        """evaluate() should keep the legacy prompt when no harness is attached."""
+        mm = MechanicManager(config, "test-run")
+
+        with patch.object(mm, "_run_query", return_value={"verdict": "approve"}) as mock_run:
+            mm.evaluate({"task": "test task", "git_changes": {"diff": "+hello"}})
+
+        prompt = mock_run.call_args[0][0]
+        assert prompt.startswith("Evaluate this changeset and return your verdict as JSON:")
+        assert "# Customer Eval Criteria" not in prompt
 
     def test_evaluate_includes_tool_log_in_payload(self, config):
         """evaluate() should include tool_log in the evaluation payload."""
@@ -1225,19 +1248,35 @@ class TestSlackAssistantHandlers:
             "context": context,
         }
 
-    def test_thread_started_says_greeting(self, mocks):
+    def test_thread_started_says_greeting(self, mocks, loaded_harness):
         """thread_started handler should call say() with a greeting."""
         say = mocks["say"]
         set_suggested_prompts = mocks["set_suggested_prompts"]
 
         # Simulate what handle_thread_started does
-        say("Hey! I'm Leo \u2014 your digital worker. Tell me what you need and I'll spin up a sandbox to get it done. \U0001f935")
+        say(
+            f"Hey! I'm {loaded_harness.bot_name} \u2014 tell me what you need and I'll get to work."
+        )
         set_suggested_prompts(prompts=[
-            {"title": "Build something", "message": "Create a new Express.js REST API with SQLite persistence and tests"},
+            {
+                "title": "Help me plan a task",
+                "message": (
+                    "I have a task I'd like your help planning. "
+                    "Ask me questions to understand what I need."
+                ),
+            },
+            {
+                "title": "Draft a short update",
+                "message": "Help me draft a short update I can share with my team.",
+            },
+            {
+                "title": "Ask me what you need",
+                "message": "What information do you need from me to do your best work?",
+            },
         ])
 
         say.assert_called_once()
-        assert "Leo" in say.call_args[0][0]
+        assert loaded_harness.bot_name in say.call_args[0][0]
         set_suggested_prompts.assert_called_once()
 
     @patch("pipeline.slack_listener._HAS_CHUNKS", False)
@@ -1307,7 +1346,7 @@ class TestSlackAssistantHandlers:
         assert not text.strip()
 
     @patch("pipeline.slack_listener._HAS_CHUNKS", False)
-    def test_user_message_timeout_says_error(self, config, mocks):
+    def test_user_message_timeout_says_error(self, config, mocks, loaded_harness):
         """When send_message raises TimeoutError, handler should say error message."""
         session_manager = MagicMock()
         mock_session = MagicMock()
@@ -1322,7 +1361,10 @@ class TestSlackAssistantHandlers:
         try:
             session_manager.send_message(mock_session, "hello")
         except TimeoutError:
-            say(":hourglass: Timed out waiting for Leo. Try again or start a new session.")
+            say(
+                f":hourglass: Timed out waiting for {loaded_harness.bot_name}. "
+                "Try again or start a new session."
+            )
             set_status(status="")
 
         say.assert_called_once()
@@ -1681,8 +1723,8 @@ class TestWorkerManager:
     """Test WorkerManager methods with mocked Docker client (Agent SDK)."""
 
     @pytest.fixture
-    def config(self, tmp_path):
-        return PipelineConfig(output_base=str(tmp_path))
+    def config(self, config_with_harness):
+        return config_with_harness
 
     @pytest.fixture
     def mock_docker(self):
@@ -1929,7 +1971,7 @@ class TestWorkerManager:
 class TestThreadReplyRouting:
     """Test that thread replies in @mention threads are routed to the session manager.
 
-    When a user @mentions Leo in a channel, Leo responds in a thread.
+    When a user @mentions the bot in a channel, it responds in a thread.
     Subsequent replies in that thread (without @mentioning) should be routed
     to the session manager if the user has an active session, not silently dropped.
     """
@@ -1939,7 +1981,7 @@ class TestThreadReplyRouting:
         return PipelineConfig(output_base=str(tmp_path))
 
     @pytest.fixture
-    def app_harness(self, tmp_path):
+    def app_harness(self, config_with_harness):
         """Create an app via create_app with mocked internals, capturing handlers."""
         from pipeline.slack_listener import create_app
 
@@ -1967,9 +2009,11 @@ class TestThreadReplyRouting:
              patch("pipeline.slack_listener.App", return_value=mock_app_instance), \
              patch("pipeline.slack_listener._get_team_id", return_value="T_TEST"), \
              patch("pipeline.slack_listener._HAS_CHUNKS", False), \
-             patch.dict(os.environ, {"SLACK_BOT_TOKEN": "xoxb-fake-token"}):
-            config = PipelineConfig(output_base=str(tmp_path))
-            app, sm = create_app(config)
+             patch.dict(
+                 os.environ,
+                 {config_with_harness.harness.bot_token_env: "xoxb-fake-token"},
+             ):
+            app, sm = create_app(config_with_harness)
 
         return {
             "handlers": handlers,
@@ -1983,7 +2027,7 @@ class TestThreadReplyRouting:
         h = app_harness
         mock_session = MagicMock()
         h["session_manager"].get_session.return_value = mock_session
-        h["session_manager"].send_message.return_value = "Leo's reply"
+        h["session_manager"].send_message.return_value = "TestBot's reply"
 
         event = {
             "type": "message",
@@ -2275,11 +2319,11 @@ class TestWorkerManagerStart:
     """Test WorkerManager.start() env var propagation."""
 
     @pytest.fixture
-    def config(self, tmp_path):
-        return PipelineConfig(output_base=str(tmp_path))
+    def config(self, config_with_harness):
+        return config_with_harness
 
     def test_start_passes_correct_env_vars(self, config):
-        """start() should pass TASK_INSTRUCTION, ANTHROPIC_API_KEY, ALLOWED_TOOLS."""
+        """start() should pass harness-derived env vars and the harness bind mount."""
         with patch("pipeline.worker_manager.docker") as mock_docker:
             mock_client = MagicMock()
             mock_docker.from_env.return_value = mock_client
@@ -2294,11 +2338,19 @@ class TestWorkerManagerStart:
 
             call_kwargs = mock_client.containers.run.call_args
             env = call_kwargs[1]["environment"]
+            volumes = call_kwargs[1]["volumes"]
 
             assert env["TASK_INSTRUCTION"] == "Do something"
             assert env["ANTHROPIC_API_KEY"] == "sk-test-token"
             assert "ALLOWED_TOOLS" in env
             assert "Bash" in env["ALLOWED_TOOLS"]
+            assert env["MAX_TURNS"] == "50"
+            assert env["MAX_BUDGET_USD"] == "5.0"
+            assert env["IDLE_TIMEOUT"] == "600"
+            assert env["WORKER_CWD"] == "/harness"
+            assert volumes == {
+                str(config.harness.harness_path): {"bind": "/harness", "mode": "rw"},
+            }
 
     def test_start_sets_container_name(self, config):
         """start() should name the container worker-{run_id}."""
@@ -2316,13 +2368,24 @@ class TestWorkerManagerStart:
             call_kwargs = mock_client.containers.run.call_args
             assert call_kwargs[1]["name"] == "worker-my-run-42"
 
+    def test_start_requires_harness(self, tmp_path):
+        """start() should refuse to run without config.harness."""
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_docker.from_env.return_value = MagicMock()
+            wm = WorkerManager(PipelineConfig(output_base=str(tmp_path)), "test-run")
+
+            with pytest.raises(
+                RuntimeError, match="WorkerManager requires config.harness to be set"
+            ):
+                wm.start("task")
+
 
 class TestWaitForCompletionEdgeCases:
     """Test WorkerManager.wait_for_completion() timeout and exit paths."""
 
     @pytest.fixture
-    def config(self, tmp_path):
-        return PipelineConfig(output_base=str(tmp_path), worker_timeout=2)
+    def config(self, config_with_harness):
+        return config_with_harness
 
     @pytest.fixture
     def mock_docker(self):
@@ -2345,8 +2408,8 @@ class TestWaitForCompletionEdgeCases:
             mock_sub.run.return_value = MagicMock(returncode=1)
             with patch("pipeline.worker_manager.time.sleep"):
                 with patch("pipeline.worker_manager.time.monotonic") as mock_time:
-                    mock_time.side_effect = [0.0, 0.0, 1.0, 3.0]
-                    with pytest.raises(TimeoutError, match="Worker did not complete"):
+                    mock_time.side_effect = [0.0, 0.0, 1.0, 601.0]
+                    with pytest.raises(TimeoutError, match="within 600s"):
                         wm.wait_for_completion()
 
     def test_container_exits_before_sentinel(self, config, mock_docker):
@@ -2360,7 +2423,7 @@ class TestWaitForCompletionEdgeCases:
             mock_sub.run.return_value = MagicMock(returncode=1)
             with patch("pipeline.worker_manager.time.sleep"):
                 with patch("pipeline.worker_manager.time.monotonic") as mock_time:
-                    mock_time.side_effect = [0.0, 0.0, 3.0]
+                    mock_time.side_effect = [0.0, 0.0]
                     with pytest.raises(TimeoutError):
                         wm.wait_for_completion()
 
@@ -2369,8 +2432,8 @@ class TestWorkerManagerCleanupEdgeCases:
     """Test WorkerManager.cleanup() edge cases."""
 
     @pytest.fixture
-    def config(self, tmp_path):
-        return PipelineConfig(output_base=str(tmp_path))
+    def config(self, config_with_harness):
+        return config_with_harness
 
     def test_cleanup_when_container_is_none(self, config):
         """cleanup() should be a no-op when _container is None."""
@@ -2686,8 +2749,8 @@ class TestDockerNetworkCreation:
     """Test WorkerManager._ensure_network()."""
 
     @pytest.fixture
-    def config(self, tmp_path):
-        return PipelineConfig(output_base=str(tmp_path))
+    def config(self, config_with_harness):
+        return config_with_harness
 
     def test_start_creates_docker_network(self, config):
         """start() should create the Docker network before starting container."""
@@ -2731,8 +2794,8 @@ class TestWorkerCrashDetection:
     """Test Worker crash detection (error file)."""
 
     @pytest.fixture
-    def config(self, tmp_path):
-        return PipelineConfig(output_base=str(tmp_path))
+    def config(self, config_with_harness):
+        return config_with_harness
 
     @pytest.fixture
     def mock_docker(self):
@@ -2946,75 +3009,82 @@ class TestPRCreatorAuth:
         gh_cmd = next(c for c in commands if c["cmd"][0] == "gh")
         assert gh_cmd["env"]["GH_TOKEN"] == "ghp_test123"
 
+    def test_create_sets_commit_author_from_harness(
+        self, config_with_harness: PipelineConfig
+    ):
+        """create() should pass harness git identity to git commit."""
+        pr = PRCreator(config_with_harness, "test-run")
+        changeset = {
+            "git_changes": {"file_contents": {"a.py": "x=1"}},
+            "worker_container": None,
+        }
+        verdict = {"pr_title": "Test", "pr_body": "Body", "files_to_include": ["a.py"]}
+
+        commands = []
+
+        def capture_run(cmd, *, cwd=None, check=True, env=None):
+            commands.append({"cmd": cmd, "env": env})
+            if cmd[0] == "git" and cmd[1] == "clone":
+                os.makedirs(cmd[-1], exist_ok=True)
+                subprocess.run(["git", "init"], cwd=cmd[-1], capture_output=True)
+                return ""
+            if cmd[0] == "git" and cmd[1] == "status":
+                return "M a.py"
+            if cmd[0] == "gh":
+                return "https://github.com/test/pr/1"
+            return ""
+
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "ghp_test123"}):
+            with patch("pipeline.pr_creator._run", side_effect=capture_run):
+                pr.create(changeset, verdict)
+
+        commit_cmd = next(c["cmd"] for c in commands if c["cmd"][0] == "git" and "commit" in c["cmd"])
+        assert "-c" in commit_cmd
+        assert "user.name=testbot" in commit_cmd
+        assert "user.email=bot@testbot.invalid" in commit_cmd
+
 
 # =========================================================================
-# Smart _ensure_image tests (ratchet mechanism)
+# _ensure_image tests
 # =========================================================================
 
 
-class TestEnsureImageRatchet:
-    """Test WorkerManager._ensure_image() rebuilds when code changes."""
+class TestEnsureImage:
+    """Test WorkerManager._ensure_image() local image checks."""
 
     @pytest.fixture
-    def config(self, tmp_path):
-        return PipelineConfig(output_base=str(tmp_path))
+    def config(self, config_with_harness):
+        return config_with_harness
 
-    def test_skips_build_when_hash_image_exists(self, config):
-        """Should skip build if image tagged with current git hash exists."""
+    def test_skips_build_when_image_exists(self, config):
+        """Should skip build if the configured worker image already exists."""
         with patch("pipeline.worker_manager.docker") as mock_docker:
             mock_client = MagicMock()
             mock_docker.from_env.return_value = mock_client
 
             wm = WorkerManager(config, "test-run")
-
-            with patch.object(wm, "_git_head_hash", return_value="abc1234"):
-                # Hash-tagged image exists
-                mock_client.images.get.return_value = MagicMock()
-                wm._ensure_image()
+            mock_client.images.get.return_value = MagicMock()
+            wm._ensure_image()
 
             mock_client.images.build.assert_not_called()
 
-    def test_rebuilds_when_hash_changes(self, config):
-        """Should rebuild if hash-tagged image doesn't exist but base does."""
+    def test_builds_when_image_missing(self, config):
+        """Should build the worker image when it does not exist locally."""
         from docker.errors import ImageNotFound
+
         with patch("pipeline.worker_manager.docker") as mock_docker:
             mock_client = MagicMock()
             mock_docker.from_env.return_value = mock_client
 
             wm = WorkerManager(config, "test-run")
-
-            def get_image(tag):
-                if "abc1234" in tag:
-                    raise ImageNotFound("not found")
-                return MagicMock()  # base image exists
-
-            mock_client.images.get.side_effect = get_image
+            mock_client.images.get.side_effect = ImageNotFound("not found")
             mock_client.images.build.return_value = (MagicMock(), [])
-
-            with patch.object(wm, "_git_head_hash", return_value="abc1234"):
-                wm._ensure_image()
+            wm._ensure_image()
 
             mock_client.images.build.assert_called_once()
-
-    def test_builds_when_no_image_at_all(self, config):
-        """Should build from scratch if no image exists."""
-        from docker.errors import ImageNotFound
-        with patch("pipeline.worker_manager.docker") as mock_docker:
-            mock_client = MagicMock()
-            mock_docker.from_env.return_value = mock_client
-
-            built_image = MagicMock()
-            # First two get() calls fail (hash tag, base tag), third succeeds (post-build tag)
-            mock_client.images.get.side_effect = [
-                ImageNotFound("hash not found"),
-                ImageNotFound("base not found"),
-                built_image,  # post-build get for tagging
-            ]
-            mock_client.images.build.return_value = (built_image, [])
-
-            wm = WorkerManager(config, "test-run")
-            with patch.object(wm, "_git_head_hash", return_value="abc1234"):
-                wm._ensure_image()
-
-            mock_client.images.build.assert_called_once()
-            built_image.tag.assert_called_once()  # tagged with hash
+            mock_client.images.build.assert_called_once_with(
+                path=".",
+                dockerfile="worker/Dockerfile",
+                tag=config.worker_image,
+                rm=True,
+            )
