@@ -150,7 +150,10 @@ class HarnessLoader:
 
     @staticmethod
     def load(harness_path: Path | str) -> LoadedHarness:
-        path = Path(harness_path)
+        # Resolve to an absolute path so LoadedHarness.harness_path always
+        # satisfies the spec §3.2 "absolute path to harness root" contract,
+        # regardless of whether the caller handed us a relative path.
+        path = Path(harness_path).resolve()
 
         if not path.exists():
             raise HarnessValidationError(f"Harness path does not exist: {path}")

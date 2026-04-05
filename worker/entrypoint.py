@@ -15,29 +15,38 @@ SENTINEL_PATH = "/tmp/session-complete"
 USAGE_PATH = "/tmp/usage.json"
 
 
+REQUIRED_IDENTITY_FILES: tuple[tuple[str, str], ...] = (
+    ("mission.md", "MISSION"),
+    ("brand.md", "BRAND"),
+    ("avatar.md", "AVATAR"),
+    ("never-list.md", "NEVER"),
+    ("bot-persona.md", "PERSONA"),
+)
+
+
 def build_system_prompt(harness_dir: str) -> str:
     """Assemble the Worker's system prompt from the harness identity files.
 
-    Reads /harness/identity/{mission,brand,avatar,never-list,bot-persona}.md
-    (or their equivalents at harness_dir) and concatenates them under the
-    section headings MISSION, BRAND, AVATAR, NEVER, PERSONA. Missing files
-    are skipped silently — HarnessLoader validation already guarantees they
-    exist for any production run, but tests may construct partial harnesses.
+    Reads ``{harness_dir}/identity/{mission,brand,avatar,never-list,bot-persona}.md``
+    in order and concatenates them under the section headings MISSION, BRAND,
+    AVATAR, NEVER, PERSONA. Every file is required — HarnessLoader validation
+    normally catches a missing file upstream, but this function is also the
+    last defense against a broken bind mount or a runtime file deletion, so
+    it raises ``FileNotFoundError`` loudly rather than producing a silently
+    truncated system prompt (CLAUDE.md "fail loud, never silent").
     """
     sections = []
     identity_dir = Path(harness_dir) / "identity"
-    file_header_pairs = (
-        ("mission.md", "MISSION"),
-        ("brand.md", "BRAND"),
-        ("avatar.md", "AVATAR"),
-        ("never-list.md", "NEVER"),
-        ("bot-persona.md", "PERSONA"),
-    )
 
-    for filename, header in file_header_pairs:
+    for filename, header in REQUIRED_IDENTITY_FILES:
         file_path = identity_dir / filename
-        if not file_path.exists():
-            continue
+        if not file_path.is_file():
+            raise FileNotFoundError(
+                f"Required identity file missing at container runtime: {file_path}. "
+                f"This should have been caught by HarnessLoader validation before "
+                f"the Worker container started — check the bind mount and the "
+                f"contents of {identity_dir}."
+            )
 
         content = file_path.read_text(encoding="utf-8").rstrip()
         sections.append(f"# {header}\n{content}\n\n")

@@ -58,8 +58,17 @@ def _base_env() -> dict[str, str]:
     return env
 
 
+_CANONICAL_HARNESS_PATH_REQUIRED = (
+    "HARNESS_PATH environment variable is required. "
+    "Set it to an absolute path to a harness repository."
+)
+
+
 def test_listener_exits_without_harness_path() -> None:
-    """Starting the listener without HARNESS_PATH must fail loud."""
+    """Starting the listener without HARNESS_PATH must exit 1 with the exact
+    canonical §6 error string (not a fragment). Tests a spec gate that is
+    part of the public listener contract.
+    """
     env = _base_env()
     # Safety: ensure HARNESS_PATH is not leaking in from the parent process.
     env.pop("HARNESS_PATH", None)
@@ -71,16 +80,23 @@ def test_listener_exits_without_harness_path() -> None:
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
     combined = result.stdout + result.stderr
-    assert "HARNESS_PATH environment variable is required" in combined, (
-        f"canonical error not found in output:\n{combined}"
+    # Exact canonical string per spec §6.
+    assert _CANONICAL_HARNESS_PATH_REQUIRED in combined, (
+        f"canonical error not found verbatim in output.\n"
+        f"expected substring:\n  {_CANONICAL_HARNESS_PATH_REQUIRED}\n"
+        f"actual output:\n{combined}"
     )
 
 
 def test_listener_exits_with_broken_harness(tmp_path: Path) -> None:
-    """Starting with a harness missing identity/brand.md must name the file."""
+    """Starting with a harness missing identity/brand.md must exit 1 with the
+    exact canonical §6 "Required identity file missing: <path>" message,
+    including the absolute path to the missing file.
+    """
     broken = tmp_path / "broken-harness"
     shutil.copytree(FIXTURE_PATH, broken)
-    (broken / "identity" / "brand.md").unlink()
+    missing_file = broken / "identity" / "brand.md"
+    missing_file.unlink()
 
     env = _base_env()
     env["HARNESS_PATH"] = str(broken)
@@ -94,9 +110,11 @@ def test_listener_exits_with_broken_harness(tmp_path: Path) -> None:
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
     combined = result.stdout + result.stderr
-    assert "Required identity file missing" in combined, (
-        f"canonical error prefix not found in output:\n{combined}"
-    )
-    assert "identity/brand.md" in combined, (
-        f"exact missing path not named in output:\n{combined}"
+    # Exact canonical string per spec §6, including the resolved absolute
+    # path to the missing file.
+    expected_msg = f"Required identity file missing: {missing_file.resolve()}"
+    assert expected_msg in combined, (
+        f"canonical error not found verbatim in output.\n"
+        f"expected substring:\n  {expected_msg}\n"
+        f"actual output:\n{combined}"
     )

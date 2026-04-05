@@ -314,7 +314,15 @@ class MechanicManager:
         return result
 
     def _build_evaluation_prompt(self, changeset_json: str) -> str:
-        """Build the Mechanic prompt, including harness eval criteria when available."""
+        """Build the Mechanic prompt, including harness eval criteria when available.
+
+        Each check is serialized with every field that carries evaluation
+        semantics (``id``, ``description``, ``type``, ``pattern``,
+        ``must_not_match``). Dropping any of these would reduce a mechanical
+        check like ``{type: regex, pattern: "!", must_not_match: true}`` to
+        bare prose with no executable meaning, which defeats the purpose of
+        plumbing eval criteria through at all.
+        """
         if self.config.harness is None:
             return "Evaluate this changeset and return your verdict as JSON:\n\n" + changeset_json
 
@@ -328,7 +336,12 @@ class MechanicManager:
 
         if criteria.checks:
             for check in criteria.checks:
-                parts.append(f"- {check.id}: {check.description}")
+                check_data = check.model_dump(exclude_none=True)
+                parts.append(f"- {check.id} ({check.type}): {check.description}")
+                for field_name, field_value in check_data.items():
+                    if field_name in ("id", "type", "description"):
+                        continue
+                    parts.append(f"    {field_name}: {field_value!r}")
         else:
             parts.append("- No additional checklist items provided.")
 

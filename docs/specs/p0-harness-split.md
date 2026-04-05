@@ -213,7 +213,7 @@ class HarnessLoader:
 
 ## 6. Error taxonomy — the contract with harness-schema §7
 
-Every error maps 1:1 to a row in §7. These strings are tested literally.
+Every error maps 1:1 to a row below. These strings are tested literally.
 
 | Condition | Canonical message |
 |---|---|
@@ -226,9 +226,11 @@ Every error maps 1:1 to a row in §7. These strings are tested literally.
 | Required env var missing | `Required secret env var missing: <name> (referenced by workspace.yaml <path>)` |
 | Required identity file missing | `Required identity file missing: <path>/identity/<name>.md` |
 | `eval/criteria.yaml` missing | `Required file missing: <path>/eval/criteria.yaml` |
+| `eval/criteria.yaml` malformed YAML | `eval/criteria.yaml parse error: <parser message>` |
+| `eval/criteria.yaml` Pydantic validation failure | `eval/criteria.yaml invalid at field "<field>": <reason>. Expected: <expected>. Got: <got>.` |
 | Required directory missing | `Required directory missing: <path>/<dir>` |
 
-`HarnessLoader` catches `pydantic.ValidationError` once, walks `err.errors()`, and re-raises `HarnessValidationError` formatted to the schema-mismatch row above. All field/path interpolation happens in this one place.
+`HarnessLoader` catches `pydantic.ValidationError` once per validated file, walks `err.errors()`, and re-raises `HarnessValidationError` formatted to the appropriate schema-mismatch row above (one for `workspace.yaml`, one for `eval/criteria.yaml`). All field/path interpolation happens at the single validator call site.
 
 ---
 
@@ -433,8 +435,8 @@ Any test that references these fixtures either gets rewritten to use the fixture
 
 All of the following must be true. Automated where possible.
 
-1. `grep -riE "leo|blacktie|mailbox|aaa-pure|usaf" pipeline/ worker/ mechanic/` returns **zero matches**.
-2. `grep -riE "leo|blacktie|mailbox|aaa-pure|usaf" tests/` returns matches **only under** `tests/fixtures/harness-fixture/` (none; fixture uses `testbot`) or in test docstrings explicitly describing the migration. Net: zero.
+1. `grep -riwE "leo|blacktie|mailbox|aaa-pure|usaf" pipeline/ worker/ mechanic/` returns **zero matches**. Word-boundary (`-w`) form is required; the naive substring grep has false positives on unrelated identifiers that happen to contain these letter sequences (e.g., Python stdlib `fileobj` contains `leo` as a substring).
+2. `grep -riwE "leo|blacktie|mailbox|aaa-pure|usaf" tests/` returns matches **only under** `tests/fixtures/harness-fixture/` (none; fixture uses `testbot`). Same word-boundary requirement as above.
 3. Fast test suite green: all tests under `tests/ -m "not slow"` pass against the fixture harness.
 4. `HARNESS_PATH` unset → `python -m pipeline.slack_listener` exits 1 with the canonical `HARNESS_PATH environment variable is required...` message. Automated as a subprocess test.
 5. `HARNESS_PATH` pointing at a copy of the fixture with `identity/brand.md` removed → listener exits 1 with `Required identity file missing: <path>/identity/brand.md`. Automated as a subprocess test.

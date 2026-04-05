@@ -407,6 +407,56 @@ class TestMechanicManagerSDK:
         assert config_with_harness.harness.eval_criteria.narrative in prompt
         assert "## Checklist" in prompt
 
+    def test_evaluate_serializes_full_check_semantics(self, config_with_harness):
+        """Each check must serialize every field that carries evaluation semantics.
+
+        Dropping type/pattern/must_not_match would reduce a mechanical check
+        like {type: regex, pattern: "!", must_not_match: true} to bare prose
+        with no executable meaning. This test locks the full-serialization
+        contract.
+        """
+        from pipeline.harness_loader import EvalCheck, EvalCriteria, LoadedHarness
+
+        harness = config_with_harness.harness
+        rich_criteria = EvalCriteria(
+            schema_version=1,
+            narrative="Keep ad copy terse, no exclamation marks, every URL must 200.",
+            checks=[
+                EvalCheck(
+                    id="no_exclamation",
+                    description="No exclamation marks in copy",
+                    type="regex",
+                    pattern="!",
+                    must_not_match=True,
+                ),
+                EvalCheck(
+                    id="on_brand",
+                    description="Colors, tone, vocabulary match brand guide",
+                    type="llm_judge",
+                ),
+            ],
+        )
+        rich_harness = LoadedHarness(
+            harness_path=harness.harness_path,
+            workspace=harness.workspace,
+            identity=harness.identity,
+            eval_criteria=rich_criteria,
+        )
+        config = PipelineConfig(output_base=config_with_harness.output_base, harness=rich_harness)
+
+        mm = MechanicManager(config, "test-run")
+        with patch.object(mm, "_run_query", return_value={"verdict": "approve"}) as mock_run:
+            mm.evaluate({"task": "test", "git_changes": {"diff": "+hi"}})
+
+        prompt = mock_run.call_args[0][0]
+        # Every check field that carries evaluation semantics must appear.
+        assert "no_exclamation (regex)" in prompt
+        assert "No exclamation marks in copy" in prompt
+        assert "pattern: '!'" in prompt
+        assert "must_not_match: True" in prompt
+        assert "on_brand (llm_judge)" in prompt
+        assert "Colors, tone, vocabulary match brand guide" in prompt
+
     def test_evaluate_skips_harness_eval_criteria_without_harness(self, config):
         """evaluate() should keep the legacy prompt when no harness is attached."""
         mm = MechanicManager(config, "test-run")
@@ -2181,17 +2231,28 @@ class TestWorkerEntrypoint:
             "# PERSONA\nPersona stub.\n\n"
         )
 
-    def test_build_system_prompt_handles_missing_files(self, tmp_path):
-        """System prompt should not crash if some identity files are missing."""
+    def test_build_system_prompt_raises_on_missing_identity_file(self, tmp_path):
+        """System prompt must fail loud if any required identity file is missing.
+
+        The spec §7.2 requires every identity file to be present for the
+        Worker to produce a well-formed system prompt. Silently skipping a
+        missing file would produce a truncated prompt that could ship wrong
+        work — CLAUDE.md "fail loud, never silent". HarnessLoader catches
+        this upstream in production; this test locks the last-defense path
+        in the entrypoint itself.
+        """
         from worker.entrypoint import build_system_prompt
 
         identity_dir = tmp_path / "identity"
         identity_dir.mkdir()
         (identity_dir / "mission.md").write_text("Mission stub.")
-        # Other identity files intentionally missing
+        (identity_dir / "brand.md").write_text("Brand stub.")
+        (identity_dir / "avatar.md").write_text("Avatar stub.")
+        (identity_dir / "never-list.md").write_text("Never stub.")
+        # bot-persona.md intentionally missing
 
-        prompt = build_system_prompt(str(tmp_path))
-        assert prompt == "# MISSION\nMission stub.\n\n"
+        with pytest.raises(FileNotFoundError, match=r"Required identity file missing.*bot-persona\.md"):
+            build_system_prompt(str(tmp_path))
 
     def test_pre_tool_use_hook_logs_to_tool_log(self, tmp_path):
         """PreToolUse hook should append a JSON line to the tool log."""
@@ -2722,18 +2783,24 @@ class TestEntrypointHelpers:
         assert tracker["input_tokens"] == 10  # unchanged
 
     def test_build_system_prompt_format(self, tmp_path):
-        """build_system_prompt should format with # headers."""
+        """build_system_prompt should format each section with # headers."""
         from worker.entrypoint import build_system_prompt
 
         identity_dir = tmp_path / "identity"
         identity_dir.mkdir()
         (identity_dir / "mission.md").write_text("Mission stub.")
         (identity_dir / "brand.md").write_text("Brand stub.")
+        (identity_dir / "avatar.md").write_text("Avatar stub.")
+        (identity_dir / "never-list.md").write_text("Never stub.")
+        (identity_dir / "bot-persona.md").write_text("Persona stub.")
 
         prompt = build_system_prompt(str(tmp_path))
 
         assert prompt.startswith("# MISSION\n")
         assert "# BRAND\n" in prompt
+        assert "# AVATAR\n" in prompt
+        assert "# NEVER\n" in prompt
+        assert "# PERSONA\n" in prompt
 
     def test_build_client_options_reads_env_vars(self):
         """_build_client_options should read MAX_TURNS and MAX_BUDGET_USD from env."""
