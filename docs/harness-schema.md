@@ -45,7 +45,8 @@ The first three are *content*. The fourth is *configuration*. Both live in the s
 ```
 harness-<slug>/
 │
-├── workspace.yaml              # REQUIRED — bot config, git identity, channels, limits
+├── workspace.yaml              # REQUIRED — engine config: bot, git, channels, limits, secrets refs
+├── slack-manifest.json         # REQUIRED — Slack App manifest (start from docs/templates/slack-manifest.json)
 ├── README.md                   # REQUIRED — what this harness is, who owns it
 │
 ├── identity/                   # REQUIRED — who the bot is
@@ -53,48 +54,76 @@ harness-<slug>/
 │   ├── brand.md                # voice, tone, colors, vocabulary
 │   ├── avatar.md               # ICP / target audience the bot serves
 │   ├── never-list.md           # things the bot must never say or do
-│   └── bot-persona.md          # the bot's personality, style, name, flair
+│   └── bot-persona.md          # the bot's personality, style, flair
 │
 ├── eval/                       # REQUIRED — what "good" looks like
-│   └── criteria.yaml           # machine-readable eval checklist the engine runs
+│   └── criteria.yaml           # narrative + checklist the Mechanic Agent uses
 │
-├── skills/                     # OPTIONAL (empty at start) — grown by the factory
+├── skills/                     # REQUIRED (empty at start) — factory-grown workflows
 │   └── <skill-slug>.md         # each follows the skill file template
-│
-├── brand-assets/               # OPTIONAL — reference materials, knowledge base
-│   ├── urls.md
-│   ├── competitors.md
-│   ├── past-campaigns/
-│   └── <whatever>.{md,pdf,png,...}
 │
 ├── mechanic-log/               # REQUIRED (empty at start) — compounding fix log
 │   └── YYYY-MM-DD-<slug>.md    # structured entries, one file per fix
 │
-├── vault/                      # OPTIONAL — working memory / Obsidian vault
-│   └── ...
+├── vault/                      # REQUIRED — per-customer LLM knowledge base
+│   │                           # (start from docs/templates/vault-starter/ — Karpathy LLM Wiki pattern)
+│   ├── VAULT.md                # the schema: how the LLM maintains this vault
+│   ├── index.md                # catalog of every page, grouped by category
+│   ├── log.md                  # append-only log of ingests, queries, lints
+│   ├── raw/                    # Layer 1 — immutable sources (brand guides, PDFs, etc.)
+│   ├── summaries/
+│   │   ├── sources/            # one summary per ingested raw source
+│   │   └── sessions/           # one summary per factory-floor session
+│   ├── entities/               # LLM-generated entity pages (competitors, products, personas, ...)
+│   ├── concepts/               # LLM-generated concept pages (brand voice, category insights, ...)
+│   └── decisions/              # LLM-generated decision log ("we tried X, result was Y, lesson is Z")
+│
+├── brand-assets/               # OPTIONAL — extra reference materials outside the vault
+│   └── <whatever>.{md,pdf,png,...}
 │
 └── deliverables-config.yaml    # OPTIONAL — where finished work goes; defaults to filesystem
 ```
+
+**Start from templates.** Every new harness begins by copying two things from the engine repo:
+- `docs/templates/slack-manifest.json` → `harness-<slug>/slack-manifest.json` (then fill in `REPLACE_ME_*` values)
+- `docs/templates/vault-starter/` → `harness-<slug>/vault/` (then leave the directories empty for the factory to populate)
 
 ### Required vs optional
 
 | Path | Required | Why |
 |------|----------|-----|
 | `workspace.yaml` | **Required** | Engine cannot start without it |
+| `slack-manifest.json` | **Required** | Source of truth for the Slack App config. Pasted into Slack UI to create/update the bot. |
 | `README.md` | **Required** | Human context for anyone opening the repo |
 | `identity/mission.md` | **Required** | Fed into Worker system prompt |
 | `identity/brand.md` | **Required** | Fed into Worker system prompt |
-| `identity/avatar.md` | Required | Fed into Worker system prompt |
-| `identity/never-list.md` | Required | Hard boundaries, fed into Worker system prompt and eval |
-| `identity/bot-persona.md` | Required | Voice / personality, fed into Worker system prompt |
+| `identity/avatar.md` | **Required** | Fed into Worker system prompt |
+| `identity/never-list.md` | **Required** | Hard boundaries — fed into Worker prompt AND eval |
+| `identity/bot-persona.md` | **Required** | Voice / personality, fed into Worker system prompt |
 | `eval/criteria.yaml` | **Required** | Mechanic Agent cannot evaluate without it |
-| `mechanic-log/` (directory exists) | **Required** | Engine writes here; cannot write to a nonexistent dir |
-| `skills/` | Optional at start | Grown over time |
-| `brand-assets/` | Optional | Reference material; nice to have |
-| `vault/` | Optional | Advanced feature |
+| `skills/` (directory) | **Required** | Worker system prompt loads skills from here; grown by factory |
+| `mechanic-log/` (directory) | **Required** | Engine writes fix proposals here; cannot write to a nonexistent dir |
+| `vault/VAULT.md` | **Required** | The schema the LLM reads to know how to maintain the vault |
+| `vault/index.md` | **Required** | Empty-but-present catalog; vault ops refuse to run without it |
+| `vault/log.md` | **Required** | Empty-but-present op log |
+| `vault/raw/` (directory) | **Required** | Where sources land before ingest |
+| `vault/summaries/sources/` | **Required** | Where per-source summaries land |
+| `vault/summaries/sessions/` | **Required** | Where per-session summaries land |
+| `vault/entities/`, `vault/concepts/`, `vault/decisions/` | **Required** | LLM-written wiki layers |
+| `brand-assets/` | Optional | Supplementary reference material outside the vault |
 | `deliverables-config.yaml` | Optional | Defaults to filesystem-based delivery |
 
 **Validation rule:** Engine refuses to start if any REQUIRED file or directory is missing. Error message must name the exact missing path.
+
+**The three factory-grown pillars.** Inside every harness, three directories are the compounding assets that grow over time:
+
+| Pillar | Contains | Who writes |
+|--------|----------|------------|
+| `skills/` | How to do things (codified workflows) | Mechanic Agent proposes; human approves |
+| `mechanic-log/` | What broke and how it was fixed | Mechanic Agent writes; human reviews |
+| `vault/` | What the bot knows about this customer | Worker ingests/queries; Mechanic lints; human corrects |
+
+All three are isolated per customer. No cross-harness sharing without explicit human action.
 
 ---
 
@@ -329,17 +358,17 @@ All four customers run as four processes on one host. One workspace (yours), fou
 
 ## 9. Open Questions (To Resolve Before Implementation)
 
-These are decisions I need to lock before writing the loader:
+The five open questions from the first draft of this document have all been resolved:
 
-1. **Harness location in dev vs prod.** In dev, sibling directory (`/Users/travis/harness-travis-personal/`). In prod, under `/var/lib/chat-force/harnesses/`. The engine doesn't care — it just reads `HARNESS_PATH`. But I want to confirm dev workflow.
+1. **Harness location.** Dev: sibling directory (e.g., `/Users/travis/harness-black-tie/`). Prod: `/var/lib/chat-force/harnesses/harness-<slug>/`. Engine reads `HARNESS_PATH` — it doesn't care where on disk the harness lives.
 
-2. **`mechanic-log/` write path.** The engine writes mistake entries here. Does it commit them to the harness git repo automatically, or just write files and let the human review + commit? First instinct: write files, never auto-commit (human must explicitly acknowledge each fix). Commits happen through the normal PR flow to the harness repo.
+2. **`mechanic-log/` write path.** Engine writes files directly, never commits. Human reviews in the `#<slug>-mechanic-log` Slack channel and commits via PR. Log files are append-only; approved fixes land in `skills/`, `eval/`, or `identity/` via the normal PR flow.
 
-3. **Secrets namespacing in Doppler.** Option A: one Doppler project (`chat-force`), one config per customer (`black-tie`, `mailbox-money`, etc.), each with `SLACK_BOT_TOKEN`, `GITHUB_TOKEN`, etc. Option B: one config, prefixed names (`BLACK_TIE_SLACK_BOT_TOKEN`, `MAILBOX_MONEY_SLACK_BOT_TOKEN`). Option A is cleaner for isolation. Option B is simpler for a single-host dev setup. I lean A for production, B acceptable for local dev.
+3. **Secrets in Doppler.** Prod: one Doppler project (`chat-force`), one config per customer (`black-tie`, `mailbox-money`, etc.). Dev: prefixed names in a single config are acceptable.
 
-4. **Shared vs per-customer Anthropic key.** Until we set up per-bot spend caps on Anthropic, one shared `ANTHROPIC_API_KEY` across all bots is simplest. Per-bot keys become important later when we want per-customer cost attribution and blast-radius isolation.
+4. **Anthropic API key.** Shared `ANTHROPIC_API_KEY` across all bots for v1. Per-bot keys added later once we need per-customer cost attribution and blast-radius isolation.
 
-5. **Does the engine write to the harness git repo at all, ever?** Or does it only ever *read*, and the Mechanic Agent produces PRs that land in the harness repo through a separate flow? Cleanest answer: engine only reads; all writes go through the Mechanic PR flow. But `mechanic-log/` entries are one exception — they're logs, not fixes. I want to keep writes to zero-or-logs-only.
+5. **Engine writes to the harness repo.** Engine only writes to `mechanic-log/` (log entries, never commits) and `vault/` (session summaries, vault index updates, vault log). Everything else in the harness — skills, eval, identity, workspace.yaml — is human-edited via PR. The Mechanic Agent proposes fixes by writing log entries; a human approves and PRs the actual changes.
 
 ---
 

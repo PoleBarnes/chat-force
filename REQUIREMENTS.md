@@ -99,9 +99,28 @@ These are the items that must be true before the first customer deployment goes 
 
 - [ ] After each session, the Mechanic Agent analyzes the session transcript + tool log + eval criteria
 - [ ] Mechanic Agent writes structured fix proposals to `harness/mechanic-log/<date>-<slug>.md`
+- [ ] Every Mechanic fix proposal includes a `test_proposal` block (skill scenario, eval fixture, regression scenario, script, or documented manual check). Proposals without one are rejected.
 - [ ] Proposals surface in `#<slug>-mechanic-log` channel for human review
 - [ ] Human-approved fixes land in the harness via PR (to `skills/`, `eval/`, or persona files)
 - [ ] The Mechanic Agent never auto-installs fixes — approval gate is enforced
+- [ ] Customer feedback ingestion: any customer reaction or reply to a deliverable triggers a Mechanic operation that analyzes the feedback and proposes eval/identity updates (`mechanic-log/<date>-feedback-*.md`)
+- [ ] Vault lint: scheduled Mechanic pass walks the vault for orphans, stale claims, contradictions; writes `mechanic-log/<date>-vault-lint.md` for human review
+
+### Customer Intake / Grill-Me
+
+- [ ] `docs/templates/skills/grill-me.md` copied into every new harness as `skills/grill-me.md`
+- [ ] Engine intake handler invokes grill-me whenever: (a) the customer posts in `#intake` for the first time with thin harness identity/eval, (b) the customer asks for a deliverable that requires context the harness does not yet hold, or (c) mechanic-log flagged a missing field from a prior session
+- [ ] Grill-me asks one question at a time with a recommended answer, walks the decision tree (business → mission → voice → avatar → assets → eval → deliverable-specific), and writes confirmed answers back into the harness in real time
+- [ ] Grill-me explores the harness/vault/brand-assets before asking — blank questions are forbidden
+- [ ] Every grill session produces a summary page at `vault/summaries/sessions/<date>-grill-<topic>.md`
+
+### Context Window Visibility
+
+- [ ] Every bot response in a session displays the current context window usage as a percentage
+- [ ] Threshold indicators: 🟢 under 40%, 🟡 40–85%, 🔴 above 85% — so the user knows when to close the session
+- [ ] Implementation uses a `ContextActionsBlock` footer appended to every response (alongside feedback buttons), with percentage + turn count + cumulative cost
+- [ ] Computed from `WorkerManager.get_usage()` (already exists) divided by the model's context window (`workspace.yaml.bot.model_context_window`, default 200_000)
+- [ ] Gracefully degrades if `get_usage()` fails — shows "Context: unknown" rather than crashing the response
 
 ---
 
@@ -128,6 +147,14 @@ These are the load-bearing walls. Remove any of them and the system is no longer
 9. **Container-scoped privilege.** The Worker container is sandboxed — no host access, no Docker socket, capped resources, restricted egress. `bypassPermissions` is only safe because the sandbox is real.
 
 10. **Spec before code.** Every feature begins as a written spec (what it does, what it doesn't, failure modes). No code ships without its spec and its tests.
+
+11. **Grill before building.** When the harness does not have enough context to produce a good deliverable for what the customer is asking, the bot grills the customer to fill in the missing context before attempting the work. Thin harness → thin work → broken trust. Fix the harness first.
+
+12. **Feedback feeds the eval.** Every customer reaction to a deliverable — thumbs, text, rework requests, silence — becomes a data point the Mechanic Agent mines for eval/identity updates. Feedback is not discarded; it is the highest-quality training signal the system receives.
+
+13. **TDD at every layer.** Code changes follow TDD per `CLAUDE.md`. Harness changes (skills, eval, personas) proposed by the Mechanic Agent include a `test_proposal` block specifying how a regression of the fix would be detected. No test = no merge, no install, no ship.
+
+14. **Context visibility.** The user sees current context window usage on every bot turn, as a clear percentage with threshold indicators, so they can make informed decisions about when to close out a session.
 
 ---
 

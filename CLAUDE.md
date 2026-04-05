@@ -3,11 +3,13 @@
 This is the single file every agent (and every human) reads at the start of a session. It contains the non-negotiable rules. For the full picture of the system — mission, architecture, harness schema, templates, definition of done — read these in order:
 
 1. [`REQUIREMENTS.md`](REQUIREMENTS.md) — the definition of done (product, feature, non-negotiable capabilities)
-2. [`factory-blueprint.md`](factory-blueprint.md) — the product vision (vibe code up front, mechanic in the back)
-3. [`docs/architecture.md`](docs/architecture.md) — the four system views with diagrams
-4. [`docs/harness-schema.md`](docs/harness-schema.md) — the per-customer harness contract
-5. [`docs/templates/`](docs/templates/) — Slack manifest template + vault starter
-6. [`docs/claude-agent-sdk-deep-dive.md`](docs/claude-agent-sdk-deep-dive.md) — Agent SDK reference
+2. [`ROADMAP.md`](ROADMAP.md) — the current execution plan (which phase we're in, what's next)
+3. [`factory-blueprint.md`](factory-blueprint.md) — the product vision (vibe code up front, mechanic in the back)
+4. [`docs/architecture.md`](docs/architecture.md) — the four system views with diagrams
+5. [`docs/harness-schema.md`](docs/harness-schema.md) — the per-customer harness contract
+6. [`docs/templates/`](docs/templates/) — Slack manifest + vault starter + starter skills (including `grill-me`)
+7. [`mechanic/config/AGENTS.md`](mechanic/config/AGENTS.md) — Mechanic Agent workflow (four operations + TDD requirements)
+8. [`docs/claude-agent-sdk-deep-dive.md`](docs/claude-agent-sdk-deep-dive.md) — Agent SDK reference
 
 ---
 
