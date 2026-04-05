@@ -1,0 +1,40 @@
+# Test fixture harness — used by the chat-force test suite.
+# Do not replace with real customer content.
+
+schema_version: 1
+
+slug: "testbot"
+
+bot:
+  display_name: "TestBot"
+  slack_app_id: "A00TEST0000"
+  slack_bot_token_env: "TESTBOT_SLACK_BOT_TOKEN"
+  slack_app_token_env: "TESTBOT_SLACK_APP_TOKEN"
+
+git:
+  user_name: "testbot"
+  user_email: "bot@testbot.invalid"
+
+channels:
+  intake: "C00TESTINTAKE"
+  factory_floor: "C00TESTFLOOR0"
+  mechanic_log: "C00TESTMECH00"
+  brand_assets: "C00TESTASSETS"
+
+access:
+  allowed_user_ids:
+    - "U00TEST00000"
+
+limits:
+  max_concurrent_sessions: 1
+  max_budget_usd_per_session: 5.0
+  max_budget_usd_per_day: 30.0
+  max_turns_per_session: 50
+  session_idle_timeout_seconds: 600
+  worker_timeout_seconds: 600
+  mechanic_timeout_seconds: 300
+
+deliverables:
+  backend: "filesystem"
+  filesystem:
+    path: "/tmp/chat-force-testbot-deliverables"

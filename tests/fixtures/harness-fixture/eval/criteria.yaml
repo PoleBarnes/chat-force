@@ -1,0 +1,8 @@
+schema_version: 1
+
+narrative: |
+  TestBot exists to satisfy HarnessLoader validation during the chat-force
+  test suite. "Good" for TestBot means: the harness loaded, the test ran,
+  and the test passed. No content evaluation applies.
+
+checks: []
