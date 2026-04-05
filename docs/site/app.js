@@ -9,26 +9,20 @@ mermaid.initialize({
 
 // Route definitions. Each entry: file path (relative to server root) or a render function.
 const routes = {
-  'home':                   { file: null, title: 'Overview', render: renderHome },
-  'architecture':           { file: '/docs/architecture.md', title: 'Architecture — System Views' },
-  'harness-schema':         { file: '/docs/harness-schema.md', title: 'Harness Schema' },
-  'factory-blueprint':      { file: '/factory-blueprint.md', title: 'Factory Blueprint' },
-  'digital-workforce':      { file: '/Digital-Workforce-Platform-FINAL-v3.1.md', title: 'Digital Workforce Platform' },
-  'handoff':                { file: '/HANDOFF.md', title: 'HANDOFF' },
-  'pivot-plan':             { file: '/PIVOT-PLAN.md', title: 'Pivot Plan' },
-  'sprint-plan':            { file: '/SPRINT-PLAN.md', title: 'Sprint Plan' },
-  'orchestrator-prompt':    { file: '/ORCHESTRATOR-PROMPT.md', title: 'Orchestrator Prompt' },
-  'claude-agent-sdk':       { file: '/docs/claude-agent-sdk-deep-dive.md', title: 'Agent SDK Deep Dive' },
-  'requirements':           { file: '/REQUIREMENTS.md', title: 'Requirements' },
-  'journal':                { file: '/JOURNAL.md', title: 'Journal' },
-  'mechanic-soul':          { file: '/mechanic/config/SOUL.md', title: 'Mechanic — SOUL' },
-  'mechanic-identity':      { file: '/mechanic/config/IDENTITY.md', title: 'Mechanic — IDENTITY' },
-  'mechanic-agents':        { file: '/mechanic/config/AGENTS.md', title: 'Mechanic — AGENTS' },
-  'mechanic-a-prompt':      { file: '/mechanics/mechanic-a-prompt.md', title: 'Mechanic A Prompt' },
-  'mechanic-c-scout':       { file: '/mechanics/mechanic-c-scout-prompt.md', title: 'Mechanic C — The Scout' },
-  'secret-injection':       { file: '/security/secret-injection.md', title: 'Secret Injection' },
-  'self-modification-guard':{ file: '/security/self-modification-guard.md', title: 'Self-Modification Guard' },
-  'claude-md':              { file: '/CLAUDE.md', title: 'Project Rules (CLAUDE.md)' },
+  'home':                    { file: null, title: 'Overview', render: renderHome },
+  'claude-md':               { file: '/CLAUDE.md', title: 'Project Rules' },
+  'factory-blueprint':       { file: '/factory-blueprint.md', title: 'Factory Blueprint' },
+  'architecture':            { file: '/docs/architecture.md', title: 'Architecture — System Views' },
+  'harness-schema':          { file: '/docs/harness-schema.md', title: 'Harness Schema' },
+  'templates-readme':        { file: '/docs/templates/README.md', title: 'Templates README' },
+  'vault-readme':            { file: '/docs/templates/vault-starter/README.md', title: 'Vault Starter README' },
+  'vault-schema':            { file: '/docs/templates/vault-starter/VAULT.md', title: 'Vault Schema' },
+  'claude-agent-sdk':        { file: '/docs/claude-agent-sdk-deep-dive.md', title: 'Agent SDK Deep Dive' },
+  'mechanic-soul':           { file: '/mechanic/config/SOUL.md', title: 'Mechanic — SOUL' },
+  'mechanic-identity':       { file: '/mechanic/config/IDENTITY.md', title: 'Mechanic — IDENTITY' },
+  'mechanic-agents':         { file: '/mechanic/config/AGENTS.md', title: 'Mechanic — AGENTS' },
+  'secret-injection':        { file: '/security/secret-injection.md', title: 'Secret Injection' },
+  'self-modification-guard': { file: '/security/self-modification-guard.md', title: 'Self-Modification Guard' },
 };
 
 // Configure marked: mermaid blocks become divs, other code blocks get highlighted.
@@ -174,11 +168,12 @@ function renderHome() {
         <h2>Start Reading</h2>
         <p>Recommended order if this is your first time:</p>
         <ol>
-          <li><a href="#architecture">Architecture — 4 system views</a> (start here to see the shape of things)</li>
-          <li><a href="#factory-blueprint">Factory Blueprint</a> (the vision document)</li>
-          <li><a href="#harness-schema">Harness Schema</a> (the structural contract)</li>
-          <li><a href="#handoff">HANDOFF</a> (current state of the codebase)</li>
-          <li><a href="#claude-agent-sdk">Agent SDK Deep Dive</a> (reference for the runtime)</li>
+          <li><a href="#claude-md">Project Rules (CLAUDE.md)</a> — the non-negotiables, every agent reads this first</li>
+          <li><a href="#factory-blueprint">Factory Blueprint</a> — the product vision (vibe code up front, mechanic in the back)</li>
+          <li><a href="#architecture">Architecture — 4 system views</a> — see the shape of things</li>
+          <li><a href="#harness-schema">Harness Schema</a> — the per-customer harness contract</li>
+          <li><a href="#templates-readme">Templates</a> — Slack manifest + vault starter</li>
+          <li><a href="#claude-agent-sdk">Agent SDK Deep Dive</a> — runtime reference</li>
         </ol>
       </section>
     </div>
