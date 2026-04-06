@@ -3,8 +3,8 @@
 # chat-force — self-improving prototyping tool
 #
 # Chains two Claude Code CLI sessions:
-#   1. Prototype: full-power prototyping with orchestrator instructions
-#   2. Mechanic: analyzes the session, proposes harness improvements
+#   1. Prototype: full-power prototyping
+#   2. Mechanic: analyzes the session, proposes improvements
 #
 set -euo pipefail
 
@@ -25,21 +25,13 @@ warn()  { echo -e "${YELLOW}[chat-force]${NC} $*"; }
 error() { echo -e "${RED}[chat-force]${NC} $*" >&2; }
 
 require_claude() {
-    if ! command -v claude &>/dev/null; then
-        error "Claude Code CLI not found."
-        exit 1
-    fi
+    command -v claude &>/dev/null || { error "Claude Code CLI not found."; exit 1; }
 }
 
 require_project() {
-    if [[ ! -f "CLAUDE.md" ]]; then
-        error "Not a chat-force project (no CLAUDE.md). Run 'chat-force init' first."
-        exit 1
-    fi
+    [[ -f "CLAUDE.md" ]] || { error "Not a chat-force project. Run 'chat-force init' first."; exit 1; }
 }
 
-# ---------------------------------------------------------------------------
-# prototype — run a prototyping session, then hand off to mechanic
 # ---------------------------------------------------------------------------
 cmd_prototype() {
     require_claude
@@ -49,17 +41,12 @@ cmd_prototype() {
     info "Type /exit or Ctrl+C when done."
     echo ""
 
-    # Mark the time so we can find the session transcript after
-    touch /tmp/chat-force-session-marker
-
     # Run Claude Code CLI — pass all extra args through
     local exit_code=0
     claude "$@" || exit_code=$?
 
     echo ""
-    if [[ $exit_code -ne 0 ]] && [[ $exit_code -ne 130 ]]; then
-        warn "Session exited with code $exit_code"
-    fi
+    [[ $exit_code -ne 0 ]] && [[ $exit_code -ne 130 ]] && warn "Session exited with code $exit_code"
 
     info "Prototype session complete."
     local response
@@ -68,14 +55,12 @@ cmd_prototype() {
 
     if [[ "$response" =~ ^[Yy]$ ]]; then
         echo ""
-        cmd_mechanic "$@"
+        cmd_mechanic
     else
-        info "Skipping mechanic. Run 'chat-force mechanic' to review later."
+        info "Skipping mechanic. Run 'chat-force mechanic' later."
     fi
 }
 
-# ---------------------------------------------------------------------------
-# mechanic — analyze the most recent session and propose improvements
 # ---------------------------------------------------------------------------
 cmd_mechanic() {
     require_claude
@@ -84,41 +69,16 @@ cmd_mechanic() {
     info "🔧 Launching mechanic review..."
     echo ""
 
-    local task
-    task="You are the Mechanic. Analyze the most recent prototyping session.
-
-Read the git diff to see what changed during the session:
-  git diff
-
-Read recent commits:
-  git log --oneline -5
-
-Then follow your process:
-1. Analyze what was built — correctness, quality, completeness
-2. Check orchestration quality — did the prototyper delegate to sub-agents?
-3. Check for security issues, scope creep, unnecessary changes
-4. Propose improvements to the harness:
-   - New skills → .claude/skills/<name>/SKILL.md
-   - New rules → .claude/rules/<name>.md
-   - Agent definitions → .claude/agents/<name>.md
-   - CLAUDE.md updates
-   - Vault updates
-5. Present EACH proposal one at a time — wait for my approval
-6. Install approved changes and commit with descriptive messages
-7. Log all proposals to .mechanic/log/
-
-Focus on what would make the NEXT session better. Be specific, not vague."
-
+    local mechanic_args=()
     if [[ -f "$MECHANIC_PROMPT" ]]; then
-        claude --system-prompt "$MECHANIC_PROMPT" -p "$task"
-    else
-        warn "Mechanic prompt not found at $MECHANIC_PROMPT"
-        claude -p "$task"
+        mechanic_args+=(--system-prompt "$MECHANIC_PROMPT")
     fi
+
+    # The mechanic runs interactively — no -p flag, no --print.
+    # It reads the git state and session artifacts, then proposes improvements.
+    claude "${mechanic_args[@]}" "$@"
 }
 
-# ---------------------------------------------------------------------------
-# init — scaffold a new project
 # ---------------------------------------------------------------------------
 cmd_init() {
     local template="general"
@@ -130,22 +90,12 @@ cmd_init() {
     done
 
     local tpl="$TEMPLATES_DIR/$template"
-    if [[ ! -d "$tpl" ]]; then
-        error "Template '$template' not found."
-        exit 1
-    fi
+    [[ -d "$tpl" ]] || { error "Template '$template' not found."; exit 1; }
 
     info "Initializing project (template: $template)..."
 
-    # CLAUDE.md
-    if [[ ! -f "CLAUDE.md" ]]; then
-        cp "$tpl/CLAUDE.md" ./CLAUDE.md
-        ok "  Created CLAUDE.md"
-    else
-        warn "  CLAUDE.md exists — skipping"
-    fi
+    [[ ! -f "CLAUDE.md" ]] && cp "$tpl/CLAUDE.md" ./CLAUDE.md && ok "  Created CLAUDE.md"
 
-    # .claude directory
     mkdir -p .claude/rules .claude/skills .claude/agents
     [[ -f "$tpl/.claude/settings.json" ]] && [[ ! -f ".claude/settings.json" ]] && \
         cp "$tpl/.claude/settings.json" .claude/settings.json && ok "  Created .claude/settings.json"
@@ -156,18 +106,14 @@ cmd_init() {
         [[ ! -f ".claude/rules/$bn" ]] && cp "$rule" ".claude/rules/$bn" && ok "  Created .claude/rules/$bn"
     done
 
-    # vault
     if [[ ! -d "vault" ]]; then
         mkdir -p vault/{raw,summaries/sources,summaries/sessions,entities,concepts,decisions}
         for vf in VAULT.md index.md log.md; do
             [[ -f "$tpl/vault/$vf" ]] && cp "$tpl/vault/$vf" "vault/$vf"
         done
         ok "  Created vault/"
-    else
-        warn "  vault/ exists — skipping"
     fi
 
-    # .mechanic
     mkdir -p .mechanic/log
     ok "  Created .mechanic/log/"
 
@@ -175,8 +121,6 @@ cmd_init() {
     ok "Done! Edit CLAUDE.md, then run 'chat-force prototype'"
 }
 
-# ---------------------------------------------------------------------------
-# help
 # ---------------------------------------------------------------------------
 cmd_help() {
     cat <<EOF
@@ -198,8 +142,6 @@ Project structure:
 EOF
 }
 
-# ---------------------------------------------------------------------------
-# main
 # ---------------------------------------------------------------------------
 case "${1:-help}" in
     prototype)  shift; cmd_prototype "$@" ;;
