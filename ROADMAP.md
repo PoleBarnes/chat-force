@@ -281,6 +281,7 @@ Called out here so they're visible but NOT in scope for first customer live:
 - **Per-day rolling budget cap** — v1 enforces per-session hard cap only
 - **Second customer harness** — zero-code add after first customer is live
 - **Dashboards over metrics** (Grafana, alerting rules) — `curl /metrics` is enough for v1
+- **Local harness / portable sandbox** — Claude Code CLI running on customer's workstation, cloud-connected (not offline), with access to local hardware (USB, serial, JTAG debuggers, Raspberry Pi on LAN, local build systems). Boundary interface logs all local-resource access. Telemetry streams back to the factory; artifacts flow to the Mechanic; the feedback loop is fully intact. Two harness types: cloud-only (Slack + Docker, marketing clients) and local-execution (CLI + hardware + cloud connection, embedded engineering clients). Same harness schema + artifact format + mechanic loop. A real embedded client is waiting. v1 architecture must not foreclose: artifact format must not assume Docker, Mechanic must not assume Slack events, harness schema must remain deployment-agnostic. See REQUIREMENTS.md Part 4 for details.
 - All items already in REQUIREMENTS.md Part 4 (LangGraph, horizontal scaling, cross-customer knowledge, etc.)
 
 ## How to Update This File
