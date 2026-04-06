@@ -175,38 +175,35 @@ class WorkerManager:
                 f"Worker container is {self._container.status}, cannot send message"
             )
 
-        # Write message to a temp file, then docker cp into the container
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write(message)
-            tmp_path = f.name
-
         try:
+            # Clear the completion sentinel so wait_for_completion can
+            # detect the next turn's completion.
             subprocess.run(
-                ["docker", "exec", "-u", "root", self._container.id, "rm", "-f", "/tmp/session-complete"],
+                ["docker", "exec", "-u", "worker", self._container.id, "rm", "-f", "/tmp/session-complete"],
                 check=False,
                 capture_output=True,
                 timeout=5,
             )
+            # Write the message file directly as the worker user via
+            # docker exec + stdin pipe. This avoids all the permission
+            # issues with docker cp (root ownership + sticky /tmp +
+            # cap_drop=ALL removing CAP_CHOWN and CAP_FOWNER).
             subprocess.run(
-                ["docker", "cp", tmp_path, f"{self._container.id}:/tmp/next-message.txt"],
+                [
+                    "docker", "exec", "-i", "-u", "worker",
+                    self._container.id,
+                    "sh", "-c", "cat > /tmp/next-message.txt",
+                ],
+                input=message.encode("utf-8"),
                 check=True,
                 capture_output=True,
                 timeout=10,
             )
-            # docker cp creates the file as root. The worker user must be
-            # able to both READ and UNLINK the file (the entrypoint deletes
-            # it after reading). chown transfers ownership so the worker
-            # user owns the file outright — avoids sticky-bit unlink issues
-            # on /tmp.
-            subprocess.run(
-                ["docker", "exec", "-u", "root", self._container.id, "chown", "worker:worker", "/tmp/next-message.txt"],
-                check=False,  # best effort
-                capture_output=True,
-                timeout=5,
-            )
             log.info("Message sent to Worker (%d chars)", len(message))
-        finally:
-            os.unlink(tmp_path)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Failed to write message to Worker container: {exc.stderr.decode()[:200]}"
+            ) from exc
 
     def send_feedback(self, feedback: str) -> None:
         """Backward-compatible alias for send_message()."""

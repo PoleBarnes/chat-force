@@ -2200,8 +2200,8 @@ class TestWorkerManager:
         wm = WorkerManager(config, "test-run")
         assert not hasattr(wm, "_webhook")
 
-    def test_send_message_clears_sentinel_before_cp(self, config, mock_docker):
-        """send_message should rm /tmp/session-complete BEFORE docker cp."""
+    def test_send_message_clears_sentinel_before_write(self, config, mock_docker):
+        """send_message should rm sentinel BEFORE writing next-message.txt."""
         wm = WorkerManager(config, "test-run")
         wm._container = mock_docker["container"]
 
@@ -2212,26 +2212,16 @@ class TestWorkerManager:
             if cmd[0] == "docker" and cmd[1] == "exec":
                 if "rm" in cmd:
                     call_order.append("rm_sentinel")
-                elif "chown" in cmd:
-                    call_order.append("docker_exec_chown")
-            elif cmd[0] == "docker" and cmd[1] == "cp":
-                call_order.append("docker_cp")
+                elif "cat" in str(cmd):
+                    call_order.append("write_message")
 
         with patch("pipeline.worker_manager.subprocess") as mock_sub:
             mock_sub.run.side_effect = record_call
-            with patch("pipeline.worker_manager.tempfile") as mock_tmp:
-                mock_file = MagicMock()
-                mock_file.__enter__ = MagicMock(return_value=mock_file)
-                mock_file.__exit__ = MagicMock(return_value=False)
-                mock_file.name = "/tmp/fake-msg.txt"
-                mock_tmp.NamedTemporaryFile.return_value = mock_file
+            wm.send_message("hello")
 
-                with patch("pipeline.worker_manager.os.unlink"):
-                    wm.send_message("hello")
-
-        assert "rm_sentinel" in call_order, "must rm sentinel before writing next message"
-        assert call_order.index("rm_sentinel") < call_order.index("docker_cp")
-        assert call_order.index("docker_cp") < call_order.index("docker_exec_chown")
+        assert "rm_sentinel" in call_order, "must rm sentinel"
+        assert "write_message" in call_order, "must write message via docker exec"
+        assert call_order.index("rm_sentinel") < call_order.index("write_message")
 
     @patch("pipeline.worker_manager.subprocess")
     def test_get_response_reads_plain_text(self, mock_sub, config, mock_docker):
