@@ -25,12 +25,12 @@ One Slack workspace (Travis Hendrickson), one systemd unit per customer bot, one
 
 Each phase has a clear goal, the REQUIREMENTS.md items it closes, and a definition of done. Phases cannot start until their prerequisite phases are done (unless explicitly called out as parallelizable).
 
-| # | Phase | Goal (one sentence) | Rough size |
-|---|-------|---------------------|-----------|
-| P0 | **Engine / Harness Split** | Engine loads a harness from `HARNESS_PATH`; zero customer-specific content remains in chat-force. | 4–5 days |
-| P1 | **Correctness Fixes on Extracted Architecture** | Multi-turn robust, Mechanic structured output, crash surfacing, timeouts kill containers, limits plumbed from `workspace.yaml`. | 3–4 days |
-| P2 | **Persistence & Recovery** | Listener restart is safe: SQLite session store, container reconciliation on boot, approved-verdict durability. | 3–4 days |
-| P3 | **Security Hardening (Critical)** | Allowlist, container cap_drop/limits, egress allowlist, secret scanner, path traversal, scrubbed exceptions, self-modification deny-list. | 4–5 days |
+| # | Phase | Goal (one sentence) | Status |
+|---|-------|---------------------|--------|
+| P0 | **Engine / Harness Split** | Engine loads a harness from `HARNESS_PATH`; zero customer-specific content remains in chat-force. | ✅ Complete |
+| P1 | **Correctness Fixes on Extracted Architecture** | Multi-turn robust, Mechanic structured output, crash surfacing, timeouts kill containers, limits plumbed from `workspace.yaml`. | ✅ Complete |
+| P2 | **Persistence & Recovery** | Listener restart is safe: SQLite session store, container reconciliation on boot, approved-verdict durability. | ✅ Complete |
+| P3 | **Security Hardening (Critical)** | Allowlist, container cap_drop/limits, egress allowlist, secret scanner, path traversal, scrubbed exceptions, self-modification deny-list. | 7/9 (egress + gitleaks pending) |
 | P4 | **Channel Routing + Vibe Loop + Context Visibility + Grill-Me** | Per-channel handlers, eval gate on intake, `grill-me` invoked when harness is thin, context % on every reply, mechanic-log writer. | 4–5 days |
 | P5 | **Observability & Supervision** | Structured JSON logs with `run_id`, Prometheus metrics, Sentry, systemd unit, disk cleanup thread. | 2–3 days |
 | P6 | **First Customer Harness Population** | One real harness repo populated, Slack App created from manifest, Doppler configured, four channels live. | 2–3 days |

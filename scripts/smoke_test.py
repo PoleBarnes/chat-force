@@ -13,9 +13,15 @@ Requires:
 
 Usage:
     doppler run --project chat-force --config dev -- \\
+        uv run --python 3.13 \\
+        --with docker,"slack_sdk>=3.41.0","slack_bolt>=1.27.0","pydantic>=2","ruamel.yaml",claude-agent-sdk \\
         python scripts/smoke_test.py \\
         --harness-path /tmp/harness-travis-personal \\
         --channel C0AQH56K2BE
+
+Note: claude-agent-sdk is required for the Mechanic phase that runs
+after session close. Without it, the Worker responds but the Mechanic
+fails with ImportError.
 
 Exit codes:
     0 = smoke test passed
