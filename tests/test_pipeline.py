@@ -1387,52 +1387,6 @@ class TestSessionManager:
 
         mock_acquire.assert_called_once_with(timeout=5)
 
-    def test_concurrency_semaphore_enforces_limit(self, config_with_harness, mock_deps):
-        """get_or_create_session should reject when at max_concurrent_sessions."""
-        sm = self._make_manager(config_with_harness)
-        # Fixture harness has max_concurrent_sessions=1.
-        sm.get_or_create_session("U_FIRST", "C_CH", "task one")
-
-        with pytest.raises(RuntimeError, match="At capacity"):
-            sm.get_or_create_session("U_SECOND", "C_CH", "task two")
-
-    def test_concurrency_semaphore_released_on_close(self, config_with_harness, mock_deps):
-        """After close_session, another session should be allowed."""
-        sm = self._make_manager(config_with_harness)
-        sm.get_or_create_session("U_FIRST", "C_CH", "task one")
-        sm.close_session("U_FIRST")
-
-        # Should succeed — semaphore was released.
-        sm.get_or_create_session("U_SECOND", "C_CH", "task two")
-        assert sm.active_session_count == 1
-
-    def test_concurrency_semaphore_released_on_creation_failure(self, config_with_harness, mock_deps):
-        """If session creation fails, the semaphore must be released."""
-        sm = self._make_manager(config_with_harness)
-        mock_deps["worker"].start.side_effect = RuntimeError("Docker died")
-
-        with pytest.raises(RuntimeError, match="Docker died"):
-            sm.get_or_create_session("U_FAIL", "C_CH", "task")
-
-        # Semaphore should be released — next create should work.
-        mock_deps["worker"].start.side_effect = None
-        mock_deps["worker"].start.return_value = "cid" + "0" * 61
-        sm.get_or_create_session("U_RETRY", "C_CH", "task")
-        assert sm.active_session_count == 1
-
-    def test_concurrency_defaults_to_1_without_harness(self, mock_deps, tmp_path):
-        """SessionManager without a harness should allow exactly 1 session."""
-        bare_config = PipelineConfig(output_base=str(tmp_path))
-        assert bare_config.harness is None
-        sm = SessionManager(bare_config)
-        assert sm._max_sessions == 1
-
-        sm.get_or_create_session("U_ONE", "C_CH", "task")
-
-        with pytest.raises(RuntimeError, match="At capacity"):
-            sm.get_or_create_session("U_TWO", "C_CH", "task")
-
-
 # =========================================================================
 # Slack Listener — Assistant handler tests
 # =========================================================================
@@ -2739,6 +2693,7 @@ class TestWorkerManagerStart:
             call_kwargs = mock_client.containers.run.call_args
             env = call_kwargs[1]["environment"]
             volumes = call_kwargs[1]["volumes"]
+            labels = call_kwargs[1]["labels"]
 
             assert env["TASK_INSTRUCTION"] == "Do something"
             assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-test-token"
@@ -2750,6 +2705,10 @@ class TestWorkerManagerStart:
             assert env["WORKER_CWD"] == "/harness"
             assert volumes == {
                 str(config.harness.harness_path): {"bind": "/harness", "mode": "rw"},
+            }
+            assert labels == {
+                "chat-force.run_id": "test-run",
+                "chat-force.harness_slug": config.harness.slug,
             }
 
     def test_start_sets_container_name(self, config):

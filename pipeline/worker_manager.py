@@ -67,11 +67,17 @@ class WorkerManager:
             "WORKER_CWD": "/harness",
         }
 
+        labels = {
+            "chat-force.run_id": self.run_id,
+            "chat-force.harness_slug": self.config.harness.slug,
+        }
+
         self._container = self._client.containers.run(
             image=self.config.worker_image,
             name=f"worker-{self.run_id}",
             environment=env,
             volumes=volumes,
+            labels=labels,
             network=self.config.docker_network,
             detach=True,
         )
