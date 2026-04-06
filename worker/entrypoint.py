@@ -249,7 +249,8 @@ def _build_sub_agents(AgentDefinition):
         "researcher": AgentDefinition(
             description=(
                 "Research a topic using web search and URL fetching. "
-                "Use this agent when you need to find information online, "
+                "This agent has: WebSearch, WebFetch, Read, Grep. "
+                "Use it when you need to find information online, "
                 "analyze competitor websites, gather market intelligence, "
                 "or fetch content from specific URLs."
             ),
@@ -265,8 +266,10 @@ def _build_sub_agents(AgentDefinition):
         "builder": AgentDefinition(
             description=(
                 "Write code, create files, install packages, and run scripts. "
-                "Use this agent for any task that requires creating or modifying "
-                "files, running shell commands, or installing dependencies."
+                "This agent has: Bash, Read, Write, Edit, Glob, Grep. "
+                "It CAN create and modify files, run shell commands, install "
+                "pip/npm packages. Use it for ANY task that produces files or "
+                "runs commands."
             ),
             prompt=(
                 "You are a builder. Write code, create files, install packages, "
@@ -280,7 +283,8 @@ def _build_sub_agents(AgentDefinition):
         "reviewer": AgentDefinition(
             description=(
                 "Review work for quality, accuracy, and brand alignment. "
-                "Use this agent to check deliverables before presenting to the user."
+                "This agent has: Read, Grep, Glob. "
+                "Use it to check deliverables before presenting to the user."
             ),
             prompt=(
                 "You are a quality reviewer. Read the work and check it against "
