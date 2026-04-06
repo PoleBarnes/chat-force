@@ -118,18 +118,13 @@ class SessionManager:
         # Mechanic phase completes.  Signature: (session, result_dict) -> None
         self.on_session_closed: Callable[[Session, dict | None], None] | None = None
 
-        persisted_active = self._store.get_active_sessions()
-        if persisted_active:
-            log.info(
-                "Loaded %d active session rows from %s; runtime reconciliation not yet implemented",
-                len(persisted_active),
-                self._store.db_path,
-            )
-
     # -- lifecycle ------------------------------------------------------------
 
     def start(self) -> None:
         """Start the idle-timeout checker background thread."""
+        # Reconcile orphans from a previous crash BEFORE accepting messages.
+        self._reconcile_containers()
+
         if self._idle_checker is not None and self._idle_checker.is_alive():
             log.warning("Idle checker already running")
             return
@@ -163,6 +158,78 @@ class SessionManager:
                 log.warning("Error closing session for %s during shutdown", uid, exc_info=True)
 
         log.info("Session manager stopped")
+
+    # -- reconciliation -------------------------------------------------------
+
+    def _reconcile_containers(self) -> None:
+        """Clean up orphaned containers and stale sessions from a previous crash.
+
+        Called once at startup before accepting messages. We do NOT try to
+        reattach sessions — the Worker's Claude SDK session cannot survive a
+        process restart — so this is strictly cleanup: remove orphan containers
+        and mark stale session records as errored.
+        """
+        try:
+            import docker as docker_lib
+            client = docker_lib.from_env()
+        except Exception:
+            log.warning("Reconciliation skipped: could not connect to Docker", exc_info=True)
+            return
+
+        # Find all containers with our labels
+        try:
+            containers = client.containers.list(
+                all=True,
+                filters={"label": "chat-force.run_id"},
+            )
+        except Exception:
+            log.warning("Reconciliation: could not list Docker containers", exc_info=True)
+            containers = []
+
+        # Get active sessions from SQLite
+        active_sessions = self._store.get_active_sessions()
+        active_run_ids = {s["run_id"] for s in active_sessions}
+
+        container_run_ids: set[str] = set()
+
+        for container in containers:
+            run_id = container.labels.get("chat-force.run_id", "")
+            container_run_ids.add(run_id)
+
+            log.info(
+                "Reconciliation: found orphaned container %s (run_id=%s, status=%s)",
+                container.name, run_id, container.status,
+            )
+
+            try:
+                container.remove(force=True)
+                log.info("Reconciliation: removed container %s", container.name)
+            except Exception:
+                log.warning("Reconciliation: could not remove %s", container.name, exc_info=True)
+
+            if run_id in active_run_ids:
+                self._store.close_session(
+                    run_id,
+                    status="error",
+                    closed_at=datetime.now(timezone.utc).isoformat(),
+                    error="Session interrupted by listener restart",
+                )
+
+        # Mark any active sessions without containers as stale
+        for run_id in active_run_ids - container_run_ids:
+            log.info("Reconciliation: marking stale session %s as error", run_id)
+            self._store.close_session(
+                run_id,
+                status="error",
+                closed_at=datetime.now(timezone.utc).isoformat(),
+                error="Session lost — no container found after listener restart",
+            )
+
+        total = len(containers) + len(active_run_ids - container_run_ids)
+        if total:
+            log.info("Reconciliation complete: %d orphans cleaned up", total)
+        else:
+            log.debug("Reconciliation complete: no orphans found")
 
     # -- public API -----------------------------------------------------------
 
@@ -533,6 +600,19 @@ class SessionManager:
 
                 if verdict.get("approved"):
                     log.info("[%s] APPROVED on iteration %d", run_id, iteration)
+
+                    # Persist the approved verdict to disk + SQLite BEFORE
+                    # attempting PR creation. If the listener crashes between
+                    # here and the PR push, the verdict survives for manual
+                    # or automated recovery.
+                    verdict_path = os.path.join(run_dir, "verdict.json")
+                    try:
+                        with open(verdict_path, "w") as vf:
+                            json.dump(verdict, vf, indent=2, default=str)
+                        log.info("[%s] Verdict persisted to %s", run_id, verdict_path)
+                    except Exception:
+                        log.warning("[%s] Could not persist verdict to disk", run_id, exc_info=True)
+
                     pr = PRCreator(self.config, run_id)
                     pr_url = pr.create(changeset, verdict)
                     summary["pr_url"] = pr_url
