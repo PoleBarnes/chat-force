@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/linear-mcp-server"],
+      "env": {
+        "LINEAR_API_KEY": "REPLACE_ME_LINEAR_API_KEY"
+      }
+    }
+  }
+}

@@ -122,6 +122,8 @@ cmd_init() {
     info "Initializing project (template: $template)..."
 
     [[ ! -f "CLAUDE.md" ]] && cp "$tpl/CLAUDE.md" ./CLAUDE.md && ok "  Created CLAUDE.md"
+    [[ -f "$tpl/.mcp.json" ]] && [[ ! -f ".mcp.json" ]] && \
+        cp "$tpl/.mcp.json" ./.mcp.json && ok "  Created .mcp.json (MCP server config)"
 
     mkdir -p .claude/rules .claude/skills .claude/agents
     [[ -f "$tpl/.claude/settings.json" ]] && [[ ! -f ".claude/settings.json" ]] && \
@@ -132,6 +134,17 @@ cmd_init() {
         local bn; bn=$(basename "$rule")
         [[ ! -f ".claude/rules/$bn" ]] && cp "$rule" ".claude/rules/$bn" && ok "  Created .claude/rules/$bn"
     done
+
+    # Copy ticket templates
+    if [[ -d "$tpl/.claude/ticket-templates" ]]; then
+        mkdir -p .claude/ticket-templates
+        for tmpl in "$tpl/.claude/ticket-templates/"*.yaml; do
+            [[ -f "$tmpl" ]] || continue
+            local bn; bn=$(basename "$tmpl")
+            [[ ! -f ".claude/ticket-templates/$bn" ]] && \
+                cp "$tmpl" ".claude/ticket-templates/$bn" && ok "  Created .claude/ticket-templates/$bn"
+        done
+    fi
 
     if [[ ! -d "vault" ]]; then
         mkdir -p vault/{raw,summaries/sources,summaries/sessions,entities,concepts,decisions}
@@ -149,31 +162,201 @@ cmd_init() {
 }
 
 # ---------------------------------------------------------------------------
+cmd_create_ticket() {
+    require_project
+
+    local template=""
+    local -a fields=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --template) template="$2"; shift 2 ;;
+            --field) fields+=("$2"); shift 2 ;;
+            *) error "Unknown arg: $1"; exit 1 ;;
+        esac
+    done
+
+    [[ -z "$template" ]] && { error "Missing --template <name>"; exit 1; }
+
+    local tpl_file=".claude/ticket-templates/${template}.yaml"
+    if [[ ! -f "$tpl_file" ]]; then
+        error "Template '$template' not found."
+        error "Available templates:"
+        for f in .claude/ticket-templates/*.yaml; do
+            [[ -f "$f" ]] || continue
+            local n; n=$(basename "$f" .yaml)
+            error "  $n"
+        done
+        exit 1
+    fi
+
+    # Parse template and validate fields using Python (PyYAML)
+    python3 -c "
+import sys, yaml
+
+tpl_path = sys.argv[1]
+template_name = sys.argv[2]
+field_args = sys.argv[3:]
+
+with open(tpl_path) as f:
+    tpl = yaml.safe_load(f)
+
+# Parse --field key=value pairs
+provided = {}
+for fa in field_args:
+    if '=' not in fa:
+        print(f'Invalid field format: {fa} (expected key=value)', file=sys.stderr)
+        sys.exit(1)
+    k, v = fa.split('=', 1)
+    provided[k] = v
+
+# Check required inputs
+required_names = [inp['name'] for inp in tpl.get('required_inputs', [])]
+missing = [n for n in required_names if n not in provided]
+if missing:
+    print(f'Missing required fields: {', '.join(missing)}', file=sys.stderr)
+    sys.exit(1)
+
+# Build ticket output
+ticket = {
+    'template': template_name,
+    'inputs': provided,
+    'acceptance_criteria': tpl.get('acceptance_criteria', []),
+    'required_artifacts': tpl.get('required_artifacts', []),
+    'skills': tpl.get('skills', []),
+}
+print(yaml.dump(ticket, default_flow_style=False, sort_keys=False))
+" "$tpl_file" "$template" "${fields[@]}"
+}
+
+# ---------------------------------------------------------------------------
+cmd_list_templates() {
+    require_project
+
+    local tpl_dir=".claude/ticket-templates"
+    [[ -d "$tpl_dir" ]] || { error "No ticket templates found. Run 'chat-force init' first."; exit 1; }
+
+    info "Available ticket templates:"
+    echo ""
+    for f in "$tpl_dir"/*.yaml; do
+        [[ -f "$f" ]] || continue
+        local name desc
+        name=$(basename "$f" .yaml)
+        desc=$(python3 -c "
+import yaml, sys
+with open(sys.argv[1]) as f:
+    d = yaml.safe_load(f)
+print(d.get('description', '(no description)'))
+" "$f")
+        printf "  %-20s %s\n" "$name" "$desc"
+    done
+}
+
+# ---------------------------------------------------------------------------
+cmd_run() {
+    require_claude
+    require_project
+
+    local ticket_id=""
+    local branch_override=""
+    local -a extra_args=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --branch) branch_override="$2"; shift 2 ;;
+            -*) extra_args+=("$1"); shift ;;
+            *)
+                if [[ -z "$ticket_id" ]]; then
+                    ticket_id="$1"; shift
+                else
+                    extra_args+=("$1"); shift
+                fi
+                ;;
+        esac
+    done
+
+    [[ -z "$ticket_id" ]] && { error "Usage: chat-force run <ticket-id> [--branch name]"; exit 1; }
+
+    # Determine branch name
+    local branch
+    if [[ -n "$branch_override" ]]; then
+        branch="$branch_override"
+    else
+        branch="ticket/${ticket_id}"
+    fi
+
+    # Checkout or create branch
+    if git rev-parse --verify "$branch" &>/dev/null; then
+        info "Checking out existing branch: $branch"
+        git checkout "$branch"
+    else
+        info "Creating new branch: $branch"
+        git checkout -b "$branch"
+    fi
+
+    # Generate session ID
+    local session_id
+    session_id=$(uuidgen 2>/dev/null || python3 -c "import uuid; print(uuid.uuid4())")
+
+    info "Starting execution session for $ticket_id"
+    info "Branch: $branch"
+    info "Session: $session_id"
+    echo ""
+
+    # Run Claude Code CLI
+    local exit_code=0
+    claude --session-id "$session_id" ${extra_args[@]+"${extra_args[@]}"} || exit_code=$?
+
+    echo ""
+    [[ $exit_code -ne 0 ]] && [[ $exit_code -ne 130 ]] && warn "Session exited with code $exit_code"
+
+    # Commit any uncommitted changes
+    if [[ -n "$(git status --porcelain)" ]]; then
+        git add -A
+        git commit -m "WIP: ${ticket_id} session"
+        local commit_hash
+        commit_hash=$(git rev-parse --short HEAD)
+        ok "Committed changes: $commit_hash"
+    else
+        info "No changes to commit."
+    fi
+
+    info "Session complete for $ticket_id on branch $branch"
+}
+
+# ---------------------------------------------------------------------------
 cmd_help() {
     cat <<EOF
 chat-force v${CHAT_FORCE_VERSION} — self-improving prototyping tool
 
 Usage:
-  chat-force prototype [args]     Prototype session → mechanic handoff
-  chat-force mechanic [args]      Mechanic review of current project
-  chat-force init [--template T]  Scaffold a new project
-  chat-force help                 This help
+  chat-force prototype [args]           Prototype session → mechanic handoff
+  chat-force mechanic [args]            Mechanic review of current project
+  chat-force run <ticket-id> [--branch] Execute a ticket (branch + session)
+  chat-force create-ticket --template T Create a ticket from a template
+  chat-force list-templates             List available ticket templates
+  chat-force init [--template T]        Scaffold a new project
+  chat-force help                       This help
 
 Project structure:
-  CLAUDE.md              Identity and instructions
-  vault/                 Knowledge base
-  .claude/rules/         Rules (brand, eval, never-list)
-  .claude/skills/        Skills (grown by mechanic)
-  .claude/agents/        Sub-agents (grown by mechanic)
-  .mechanic/log/         Proposal history
+  CLAUDE.md                    Identity and instructions
+  vault/                       Knowledge base
+  .claude/rules/               Rules (brand, eval, never-list)
+  .claude/skills/              Skills (grown by mechanic)
+  .claude/agents/              Sub-agents (grown by mechanic)
+  .claude/ticket-templates/    Ticket templates (YAML)
+  .mechanic/log/               Proposal history
 EOF
 }
 
 # ---------------------------------------------------------------------------
 case "${1:-help}" in
-    prototype)  shift; cmd_prototype "$@" ;;
-    mechanic)   shift; cmd_mechanic "$@" ;;
-    init)       shift; cmd_init "$@" ;;
+    prototype)      shift; cmd_prototype "$@" ;;
+    mechanic)       shift; cmd_mechanic "$@" ;;
+    run)            shift; cmd_run "$@" ;;
+    create-ticket)  shift; cmd_create_ticket "$@" ;;
+    list-templates) shift; cmd_list_templates "$@" ;;
+    init)           shift; cmd_init "$@" ;;
     help|--help|-h) cmd_help ;;
     version|--version|-v) echo "chat-force v${CHAT_FORCE_VERSION}" ;;
     *) error "Unknown command: $1"; cmd_help; exit 1 ;;
