@@ -122,13 +122,11 @@ class SessionManager:
 
     def start(self) -> None:
         """Start the idle-timeout checker background thread."""
-        # Reconcile orphans from a previous crash BEFORE accepting messages.
-        self._reconcile_containers()
-
         if self._idle_checker is not None and self._idle_checker.is_alive():
             log.warning("Idle checker already running")
             return
 
+        self.reconcile_containers()
         self._stop_event.clear()
         self._idle_checker = threading.Thread(
             target=self._check_idle_sessions,
@@ -161,13 +159,10 @@ class SessionManager:
 
     # -- reconciliation -------------------------------------------------------
 
-    def _reconcile_containers(self) -> None:
+    def reconcile_containers(self) -> None:
         """Clean up orphaned containers and stale sessions from a previous crash.
 
-        Called once at startup before accepting messages. We do NOT try to
-        reattach sessions — the Worker's Claude SDK session cannot survive a
-        process restart — so this is strictly cleanup: remove orphan containers
-        and mark stale session records as errored.
+        Called once at listener startup, before accepting any new messages.
         """
         try:
             import docker as docker_lib
@@ -229,7 +224,7 @@ class SessionManager:
         if total:
             log.info("Reconciliation complete: %d orphans cleaned up", total)
         else:
-            log.debug("Reconciliation complete: no orphans found")
+            log.info("Reconciliation complete: no orphans found")
 
     # -- public API -----------------------------------------------------------
 

@@ -34,6 +34,7 @@ from pipeline.disk_cleanup import DiskCleanupThread
 from pipeline.harness_loader import HarnessLoader, HarnessValidationError
 from pipeline.scrub import scrub_secrets
 from pipeline.session_manager import Session, SessionManager
+from pipeline.slack_format import context_footer
 from pipeline.worker_manager import WorkerCrashError
 
 # Thinking-step chunk types -- available in slack_sdk >= 3.41.
@@ -254,6 +255,35 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
     def _is_authorized(user_id: str | None) -> bool:
         """Check if the user is on the harness allowlist."""
         return user_id is not None and user_id in allowed_user_ids
+
+    # Channel role resolution — maps channel IDs to their function.
+    channels = config.harness.workspace.channels
+    _channel_roles = {
+        channels.intake: "intake",
+        channels.factory_floor: "factory_floor",
+        channels.mechanic_log: "mechanic_log",
+        channels.brand_assets: "brand_assets",
+    }
+
+    def _resolve_channel_role(channel_id: str) -> str | None:
+        """Return the channel's role, or None for unknown channels."""
+        return _channel_roles.get(channel_id)
+
+    # Context footer: model_context_window from harness (or default 200k).
+    _model_ctx = getattr(
+        config.harness.workspace.bot, "model_context_window", 200_000
+    )
+
+    def _with_context_footer(text: str, session: Session | None) -> str:
+        """Append context window usage footer to a bot response."""
+        if session is None or session.worker is None:
+            return text
+        try:
+            usage = session.worker.get_usage()
+            footer = context_footer(usage, _model_ctx)
+            return f"{text}\n\n_{footer}_"
+        except Exception:
+            return text
 
     app = App(token=os.environ[config.harness.bot_token_env])
     session_manager = SessionManager(config)
@@ -674,6 +704,15 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 pass
             return
 
+        # Channel routing — only process messages in known channels.
+        role = _resolve_channel_role(channel_id)
+        if role == "mechanic_log":
+            log.debug("Ignoring @mention in mechanic-log channel %s", channel_id)
+            return
+        if role == "brand_assets":
+            log.debug("Ignoring @mention in brand-assets channel %s (asset ingestion is future work)", channel_id)
+            return
+
         # Strip the @mention prefix (e.g. "<@U1234ABC> do something")
         text = re.sub(r"<@[A-Z0-9]+>\s*", "", raw_text).strip()
         if not text:
@@ -697,7 +736,10 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                     say(f":warning: Could not deliver message: {exc}", thread_ts=thread_ts)
                     return
 
-                say(response or empty_response_text, thread_ts=thread_ts)
+                say(
+                    _with_context_footer(response or empty_response_text, existing),
+                    thread_ts=thread_ts,
+                )
                 return
 
             # New session -- enrich with channel history.
@@ -733,7 +775,10 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                     say(f":warning: Could not deliver message: {exc}", thread_ts=thread_ts)
                     return
 
-                say(response or empty_response_text, thread_ts=thread_ts)
+                say(
+                    _with_context_footer(response or empty_response_text, session),
+                    thread_ts=thread_ts,
+                )
                 return
 
             version = session.sandbox_version
@@ -753,7 +798,10 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 else empty_response_text
             )
 
-            say(response_text, thread_ts=thread_ts)
+            say(
+                _with_context_footer(response_text, session),
+                thread_ts=thread_ts,
+            )
 
         except Exception:
             log.error("Unhandled error in mention handler", exc_info=True)
