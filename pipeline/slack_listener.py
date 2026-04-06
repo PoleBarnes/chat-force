@@ -948,9 +948,12 @@ def main() -> None:
     def shutdown(signum, _frame):
         sig_name = signal.Signals(signum).name
         log.info("Received %s -- shutting down", sig_name)
-        proxy.stop()
-        cleanup.stop()
+        # Order matters: session_manager.stop() runs the Mechanic phase for
+        # active sessions, which needs the credential proxy to be alive.
+        # Stop the proxy LAST so the Mechanic can still reach the Claude API.
         session_manager.stop()
+        cleanup.stop()
+        proxy.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)

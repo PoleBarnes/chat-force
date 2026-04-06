@@ -96,6 +96,14 @@ The engine and Worker have a strict contract on file paths, env vars, and comman
 
 - Python 3.13 only. Local commands use `uv run --python 3.13 --with <deps>`.
 - Pipeline CLI entrypoint: `python -m pipeline.main --task "..."` (or the equivalent `uv run` form).
+- Listener startup (local dev):
+  ```bash
+  doppler run --project chat-force --config dev -- \
+    uv run --python 3.13 \
+      --with docker,"slack_sdk>=3.41.0","slack_bolt>=1.27.0","pydantic>=2","ruamel.yaml",claude-agent-sdk \
+      python -m pipeline.slack_listener
+  ```
+  The `claude-agent-sdk` dep is required for the Mechanic phase (host-side session analysis). Without it the Worker responds but the Mechanic skips.
 - Never hand-edit `pyproject.toml` or add dependencies without declaring them in the `uv run --with` command used to run tests/the listener.
 
 ### Worker runtime contract

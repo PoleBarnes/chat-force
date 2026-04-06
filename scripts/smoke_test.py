@@ -174,11 +174,15 @@ def _wait_for_listener_ready(proc: subprocess.Popen, timeout: int) -> None:
 
 
 def _stop_listener(proc: subprocess.Popen) -> None:
-    """Gracefully stop the listener subprocess."""
+    """Gracefully stop the listener subprocess.
+
+    The grace period must be long enough for the Mechanic phase to run
+    on shutdown (changeset extraction + Claude API call = 15-30s).
+    """
     if proc.poll() is None:
         proc.send_signal(signal.SIGTERM)
         try:
-            proc.wait(timeout=10)
+            proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
