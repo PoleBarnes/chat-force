@@ -37,25 +37,30 @@ cmd_prototype() {
     require_claude
     require_project
 
-    info "Starting prototyping session..."
+    # Generate a session ID so we can hand it to the mechanic.
+    # Claude Code CLI accepts --session-id to tag the session.
+    local session_id
+    session_id=$(uuidgen 2>/dev/null || python3 -c "import uuid; print(uuid.uuid4())")
+
+    info "Starting prototyping session: $session_id"
     info "Type /exit or Ctrl+C when done."
     echo ""
 
-    # Run Claude Code CLI — pass all extra args through
+    # Run Claude Code CLI with our session ID — pass all extra args through
     local exit_code=0
-    claude "$@" || exit_code=$?
+    claude --session-id "$session_id" "$@" || exit_code=$?
 
     echo ""
     [[ $exit_code -ne 0 ]] && [[ $exit_code -ne 130 ]] && warn "Session exited with code $exit_code"
 
-    info "Prototype session complete."
+    info "Prototype session complete: $session_id"
     local response
     read -r -p "$(echo -e "${BLUE}[chat-force]${NC} Launch mechanic review? [Y/n] ")" response
     response=${response:-Y}
 
     if [[ "$response" =~ ^[Yy]$ ]]; then
         echo ""
-        cmd_mechanic
+        cmd_mechanic "$session_id"
     else
         info "Skipping mechanic. Run 'chat-force mechanic' later."
     fi
@@ -66,7 +71,10 @@ cmd_mechanic() {
     require_claude
     require_project
 
+    local session_id="${1:-}"
+
     info "🔧 Launching mechanic review..."
+    [[ -n "$session_id" ]] && info "Session: $session_id"
     echo ""
 
     local mechanic_args=()
@@ -74,9 +82,28 @@ cmd_mechanic() {
         mechanic_args+=(--system-prompt "$MECHANIC_PROMPT")
     fi
 
-    # The mechanic runs interactively — no -p flag, no --print.
-    # It reads the git state and session artifacts, then proposes improvements.
-    claude "${mechanic_args[@]}" "$@"
+    # Build context about which session to analyze
+    local session_context=""
+    if [[ -n "$session_id" ]]; then
+        # Try to find the session transcript
+        local project_path
+        project_path="$(pwd)"
+        local project_key="${project_path//\//-}"
+        local session_file="$HOME/.claude/projects/-${project_key}/${session_id}.jsonl"
+
+        if [[ -f "$session_file" ]]; then
+            session_context="Session transcript is at: $session_file"
+            info "Found session transcript."
+        else
+            session_context="Session ID is $session_id but transcript file not found. Analyze from git state instead."
+            info "Session file not found — mechanic will work from git state."
+        fi
+    fi
+
+    # The mechanic runs interactively by default.
+    # If extra args include -p, it runs non-interactively (for testing).
+    local remaining_args=("${@:2}")
+    claude "${mechanic_args[@]}" "${remaining_args[@]}"
 }
 
 # ---------------------------------------------------------------------------
