@@ -2949,8 +2949,10 @@ class TestWorkerManagerStart:
             assert env["MAX_BUDGET_USD"] == "5.0"
             assert env["IDLE_TIMEOUT"] == "600"
             assert env["WORKER_CWD"] == "/harness"
+            harness_path = config.harness.harness_path
             assert volumes == {
-                str(config.harness.harness_path): {"bind": "/harness", "mode": "rw"},
+                str(harness_path): {"bind": "/harness", "mode": "ro"},
+                str(harness_path / "vault"): {"bind": "/harness/vault", "mode": "rw"},
             }
             assert labels == {
                 "chat-force.run_id": "test-run",

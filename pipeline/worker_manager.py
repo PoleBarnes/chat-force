@@ -48,8 +48,14 @@ class WorkerManager:
             raise RuntimeError("WorkerManager requires config.harness to be set")
 
         limits = self.config.harness.workspace.limits
+        harness_path = self.config.harness.harness_path
+
+        # Mount the harness read-only so the Worker can't modify its own
+        # identity, eval criteria, workspace.yaml, or resource limits.
+        # Only vault/ is writable (for session summaries).
         volumes = {
-            str(self.config.harness.harness_path): {"bind": "/harness", "mode": "rw"},
+            str(harness_path): {"bind": "/harness", "mode": "ro"},
+            str(harness_path / "vault"): {"bind": "/harness/vault", "mode": "rw"},
         }
 
         self._ensure_network()
