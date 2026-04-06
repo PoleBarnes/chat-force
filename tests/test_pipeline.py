@@ -1041,6 +1041,92 @@ class TestSessionManager:
         )
         return config
 
+    def test_reconcile_removes_orphaned_containers(self, config, mock_deps):
+        sm = self._make_manager(config)
+        container = MagicMock()
+        container.labels = {"chat-force.run_id": "orphan-123"}
+        container.name = "worker-orphan-123"
+        container.status = "exited"
+
+        mock_client = MagicMock()
+        mock_client.containers.list.return_value = [container]
+
+        with patch("docker.from_env", return_value=mock_client):
+            sm.reconcile_containers()
+
+        mock_client.containers.list.assert_called_once_with(
+            all=True,
+            filters={"label": "chat-force.run_id"},
+        )
+        container.remove.assert_called_once_with(force=True)
+        assert sm._store.get_active_sessions() == []
+
+    def test_reconcile_marks_active_sessions_as_error(self, config, mock_deps):
+        sm = self._make_manager(config)
+        run_id = "active-no-container"
+        sm._store.create_session(
+            run_id=run_id,
+            user_id="U_RECON_1",
+            channel_id="C_RECON_1",
+            first_message="recover me",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        mock_client = MagicMock()
+        mock_client.containers.list.return_value = []
+
+        with patch("docker.from_env", return_value=mock_client):
+            sm.reconcile_containers()
+
+        row = sm._store.get_session(run_id)
+        assert row is not None
+        assert row["status"] == "error"
+        assert row["closed_at"] is not None
+        assert row["error"] == "Session lost — no container found after listener restart"
+
+    def test_reconcile_cleans_both(self, config, mock_deps):
+        sm = self._make_manager(config)
+        run_id = "active-with-container"
+        sm._store.create_session(
+            run_id=run_id,
+            user_id="U_RECON_2",
+            channel_id="C_RECON_2",
+            first_message="recover me too",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        container = MagicMock()
+        container.labels = {"chat-force.run_id": run_id}
+        container.name = f"worker-{run_id}"
+        container.status = "running"
+
+        mock_client = MagicMock()
+        mock_client.containers.list.return_value = [container]
+
+        with patch("docker.from_env", return_value=mock_client):
+            sm.reconcile_containers()
+
+        container.remove.assert_called_once_with(force=True)
+        row = sm._store.get_session(run_id)
+        assert row is not None
+        assert row["status"] == "error"
+        assert row["closed_at"] is not None
+        assert row["error"] == "Session interrupted by listener restart"
+
+    def test_reconcile_no_orphans(self, config, mock_deps):
+        sm = self._make_manager(config)
+        mock_client = MagicMock()
+        mock_client.containers.list.return_value = []
+
+        with patch("docker.from_env", return_value=mock_client):
+            sm.reconcile_containers()
+
+        mock_client.containers.list.assert_called_once_with(
+            all=True,
+            filters={"label": "chat-force.run_id"},
+        )
+        assert sm._store.get_active_sessions() == []
+
     def test_get_or_create_creates_new_session(self, config, mock_deps):
         """First call for a user should create a new session."""
         sm = self._make_manager(config)
@@ -2323,13 +2409,13 @@ class TestThreadReplyRouting:
         h["streamer"].stop.assert_called()
 
     def test_thread_reply_without_active_session_is_ignored(self, app_harness):
-        """A thread reply from a user with NO active session should be silently ignored."""
+        """A thread reply from an authorized user with NO active session should be silently ignored."""
         h = app_harness
         h["session_manager"].get_session.return_value = None
 
         event = {
             "type": "message",
-            "user": "U_NOBODY",
+            "user": "U_TEST",  # authorized but no active session
             "text": "Some reply",
             "channel": "C_CHANNEL",
             "ts": "2222.3333",
@@ -2339,9 +2425,26 @@ class TestThreadReplyRouting:
         handler = h["handlers"]["message"]
         handler(event=event, say=MagicMock(), client=h["client"], logger=MagicMock())
 
-        h["session_manager"].get_session.assert_called_with("U_NOBODY")
+        h["session_manager"].get_session.assert_called_with("U_TEST")
         h["session_manager"].send_message.assert_not_called()
-        h["client"].chat_stream.assert_not_called()
+
+    def test_thread_reply_from_unauthorized_user_is_dropped(self, app_harness):
+        """An unauthorized user's thread reply should be silently dropped."""
+        h = app_harness
+
+        event = {
+            "type": "message",
+            "user": "U_INTRUDER",
+            "text": "Trying to sneak in",
+            "channel": "C_CHANNEL",
+            "ts": "3333.4444",
+            "thread_ts": "3333.0000",
+        }
+
+        handler = h["handlers"]["message"]
+        handler(event=event, say=MagicMock(), client=h["client"], logger=MagicMock())
+
+        h["session_manager"].get_session.assert_not_called()
 
     def test_non_thread_message_is_ignored(self, app_harness):
         """A top-level channel message (not a thread reply) should be silently ignored."""

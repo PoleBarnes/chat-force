@@ -24,6 +24,15 @@ channels:
 access:
   allowed_user_ids:
     - "U00TEST00000"
+    - "U_TEST"
+    - "U_USER"
+    - "U_FIRST"
+    - "U_SECOND"
+    - "USER_A"
+    - "USER_B"
+    - "U222"
+    - "U_HUMAN"
+    - "U0AG4Q4G1FB"
 
 limits:
   max_concurrent_sessions: 1

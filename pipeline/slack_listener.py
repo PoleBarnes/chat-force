@@ -32,6 +32,7 @@ from slack_sdk.models.blocks import (
 from pipeline.config import PipelineConfig
 from pipeline.disk_cleanup import DiskCleanupThread
 from pipeline.harness_loader import HarnessLoader, HarnessValidationError
+from pipeline.scrub import scrub_secrets
 from pipeline.session_manager import Session, SessionManager
 from pipeline.worker_manager import WorkerCrashError
 
@@ -151,7 +152,7 @@ def _make_session_closed_callback(client: WebClient):
                 error = result.get("error", "Unknown error")
                 client.chat_postMessage(
                     channel=channel,
-                    text=f"\u26a0\ufe0f Session closed with error: {error[:300]}",
+                    text=f"\u26a0\ufe0f Session closed with error: {scrub_secrets(error[:300])}",
                 )
 
             elif status == "mechanic_error":
@@ -165,7 +166,7 @@ def _make_session_closed_callback(client: WebClient):
 
             elif status == "worker_crashed":
                 error = result.get("error", "")
-                scrubbed = error.split("\n")[0][:200] if error else "Unknown crash"
+                scrubbed = scrub_secrets(error.split("\n")[0][:200]) if error else "Unknown crash"
                 client.chat_postMessage(
                     channel=channel,
                     text=f":boom: Worker crashed: {scrubbed}",
@@ -248,6 +249,12 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
     )
     timeout_text = f":hourglass: Timed out waiting for {bot_name}. Try again."
 
+    allowed_user_ids = set(config.harness.workspace.access.allowed_user_ids)
+
+    def _is_authorized(user_id: str | None) -> bool:
+        """Check if the user is on the harness allowlist."""
+        return user_id is not None and user_id in allowed_user_ids
+
     app = App(token=os.environ[config.harness.bot_token_env])
     session_manager = SessionManager(config)
 
@@ -303,6 +310,12 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
             channel_id = payload["channel"]
             text = payload.get("text", "")
             thread_ts = payload["thread_ts"]
+
+            if not _is_authorized(user_id):
+                log.info("Unauthorized user %s in assistant thread — ignoring", user_id)
+                say("You are not authorized to use this bot.")
+                set_status(status="")
+                return
 
             if not text.strip():
                 return
@@ -585,6 +598,9 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         if not user_id or not text.strip():
             return
 
+        if not _is_authorized(user_id):
+            return  # silently ignore unauthorized thread replies
+
         # Check if the user has an active session.
         session = session_manager.get_session(user_id)
         if session is None:
@@ -644,6 +660,18 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         event_ts = event.get("event_ts") or event.get("ts")
 
         if not user_id:
+            return
+
+        if not _is_authorized(user_id):
+            log.info("Unauthorized user %s in @mention — ignoring", user_id)
+            try:
+                client.chat_postEphemeral(
+                    channel=channel_id,
+                    user=user_id,
+                    text="You are not authorized to use this bot.",
+                )
+            except Exception:
+                pass
             return
 
         # Strip the @mention prefix (e.g. "<@U1234ABC> do something")

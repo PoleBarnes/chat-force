@@ -114,7 +114,7 @@ def test_workspace_config_fully_populated(
     assert result.workspace.bot.display_name == "TestBot"
     assert result.workspace.limits.max_turns_per_session == 50
     assert result.workspace.channels.intake == "C00TESTINTAKE"
-    assert result.workspace.access.allowed_user_ids == ["U00TEST00000"]
+    assert "U00TEST00000" in result.workspace.access.allowed_user_ids
     assert result.workspace.deliverables.backend == "filesystem"
 
 
