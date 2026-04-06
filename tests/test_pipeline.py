@@ -3394,9 +3394,9 @@ class TestEntrypointHelpers:
             opts = _build_client_options("prompt", {}, FakeOptions, FakeHookMatcher)
         assert opts.max_turns == 10
         assert opts.max_budget_usd == 2.5
-        # Orchestrator tools: read-only + delegation only
-        assert opts.tools == ["Agent", "Read", "Grep", "Glob"]
-        assert opts.allowed_tools == ["Agent", "Read", "Grep", "Glob"]
+        # Parent has all tools (so sub-agents can inherit them).
+        # Delegation is enforced via ROLE.md instructions.
+        assert not hasattr(opts, "tools") or opts.tools is None  # default = all tools
 
 
 # =========================================================================
