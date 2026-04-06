@@ -181,16 +181,39 @@ class SessionManager:
             else:
                 pending = None
 
-            if pending is None:
-                # Enforce concurrency cap before creating a new session.
-                # The semaphore is released in close_session().
-                if not self._session_semaphore.acquire(blocking=False):
-                    raise RuntimeError(
-                        f"At capacity ({self._max_sessions} concurrent session"
-                        f"{'s' if self._max_sessions != 1 else ''}). "
-                        f"Try again in a minute."
-                    )
+        # If another thread is already creating a session, wait for it.
+        if pending is not None:
+            pending._ready.wait(timeout=self._idle_timeout)
+            # The creating thread may have failed and removed the session.
+            # Check that the session is still registered and has a worker.
+            with self._lock:
+                current = self._sessions.get(user_id)
+            if current is None or current.worker is None:
+                raise RuntimeError(
+                    f"Session creation for user {user_id} failed (waited on placeholder)"
+                )
+            return current, False
 
+        # Only acquire the semaphore when we're about to create a new session
+        # (not when returning an existing one). The semaphore is released in
+        # close_session().
+        if not self._session_semaphore.acquire(timeout=5):
+            raise RuntimeError(
+                f"At capacity ({self._max_sessions} concurrent sessions). "
+                f"Try again in a minute."
+            )
+
+        with self._lock:
+            existing = self._sessions.get(user_id)
+            if existing is not None:
+                if existing.worker is not None:
+                    self._session_semaphore.release()
+                    return existing, False
+                pending = existing
+            else:
+                pending = None
+
+            if pending is None:
                 # Reserve the slot atomically (same lock acquisition as the
                 # check above) so a concurrent call for the same user_id
                 # cannot also see "no session" and start a second container.
@@ -208,18 +231,16 @@ class SessionManager:
                 )
                 self._sessions[user_id] = session
 
-        # If another thread is already creating a session, wait for it.
         if pending is not None:
+            self._session_semaphore.release()
             pending._ready.wait(timeout=self._idle_timeout)
-            # The creating thread may have failed and removed the session.
-            # Check that the session is still registered and has a worker.
             with self._lock:
                 current = self._sessions.get(user_id)
             if current is None or current.worker is None:
                 raise RuntimeError(
                     f"Session creation for user {user_id} failed (waited on placeholder)"
                 )
-            return pending, False
+            return current, False
 
         # Container startup happens outside the lock so we don't block other
         # users.  If it fails we remove the reservation.

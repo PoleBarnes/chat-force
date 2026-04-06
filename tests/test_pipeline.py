@@ -975,12 +975,8 @@ class TestSessionManager:
     """Test session lifecycle management with mocked dependencies."""
 
     @pytest.fixture
-    def config(self, tmp_path):
-        return PipelineConfig(
-            output_base=str(tmp_path),
-            worker_timeout=5,
-            session_idle_timeout=60,
-        )
+    def config(self, config_with_harness):
+        return self._with_max_concurrent_sessions(config_with_harness, 10)
 
     @pytest.fixture
     def mock_deps(self):
@@ -1026,6 +1022,24 @@ class TestSessionManager:
     def _make_manager(self, config):
         """Create a SessionManager for testing."""
         return SessionManager(config)
+
+    def _with_max_concurrent_sessions(self, config, max_sessions):
+        from pipeline.harness_loader import LoadedHarness
+
+        harness = config.harness
+        assert harness is not None
+
+        limits = harness.workspace.limits.model_copy(
+            update={"max_concurrent_sessions": max_sessions}
+        )
+        workspace = harness.workspace.model_copy(update={"limits": limits})
+        config.harness = LoadedHarness(
+            harness_path=harness.harness_path,
+            workspace=workspace,
+            identity=harness.identity,
+            eval_criteria=harness.eval_criteria,
+        )
+        return config
 
     def test_get_or_create_creates_new_session(self, config, mock_deps):
         """First call for a user should create a new session."""
@@ -1325,6 +1339,54 @@ class TestSessionManager:
         sm.close_session("U020")
         assert sm.active_session_count == 0
 
+    def test_session_manager_enforces_concurrency_limit(self, config, mock_deps):
+        config = self._with_max_concurrent_sessions(config, 1)
+        sm = self._make_manager(config)
+
+        sm.get_or_create_session("U021", "C021", "first")
+
+        with patch.object(sm._session_semaphore, "acquire", return_value=False) as mock_acquire:
+            with pytest.raises(RuntimeError, match="At capacity"):
+                sm.get_or_create_session("U022", "C022", "second")
+
+        mock_acquire.assert_called_once_with(timeout=5)
+
+    def test_session_manager_releases_semaphore_on_close(self, config, mock_deps):
+        config = self._with_max_concurrent_sessions(config, 1)
+        sm = self._make_manager(config)
+
+        session1, is_new1 = sm.get_or_create_session("U023", "C023", "first")
+        assert is_new1 is True
+
+        sm.close_session("U023")
+
+        session2, is_new2 = sm.get_or_create_session("U024", "C024", "second")
+        assert is_new2 is True
+        assert session1.user_id == "U023"
+        assert session2.user_id == "U024"
+
+    def test_session_manager_semaphore_defaults_to_1_without_harness(
+        self, tmp_path, mock_deps
+    ):
+        config = PipelineConfig(
+            output_base=str(tmp_path),
+            worker_timeout=5,
+            session_idle_timeout=60,
+            harness=None,
+        )
+        sm = self._make_manager(config)
+
+        session, is_new = sm.get_or_create_session("U025", "C025", "first")
+        assert is_new is True
+        assert session.user_id == "U025"
+        assert sm._max_sessions == 1
+
+        with patch.object(sm._session_semaphore, "acquire", return_value=False) as mock_acquire:
+            with pytest.raises(RuntimeError, match="At capacity"):
+                sm.get_or_create_session("U026", "C026", "second")
+
+        mock_acquire.assert_called_once_with(timeout=5)
+
     def test_concurrency_semaphore_enforces_limit(self, config_with_harness, mock_deps):
         """get_or_create_session should reject when at max_concurrent_sessions."""
         sm = self._make_manager(config_with_harness)
@@ -1358,9 +1420,13 @@ class TestSessionManager:
         sm.get_or_create_session("U_RETRY", "C_CH", "task")
         assert sm.active_session_count == 1
 
-    def test_concurrency_defaults_to_1_without_harness(self, config, mock_deps):
+    def test_concurrency_defaults_to_1_without_harness(self, mock_deps, tmp_path):
         """SessionManager without a harness should allow exactly 1 session."""
-        sm = self._make_manager(config)
+        bare_config = PipelineConfig(output_base=str(tmp_path))
+        assert bare_config.harness is None
+        sm = SessionManager(bare_config)
+        assert sm._max_sessions == 1
+
         sm.get_or_create_session("U_ONE", "C_CH", "task")
 
         with pytest.raises(RuntimeError, match="At capacity"):
