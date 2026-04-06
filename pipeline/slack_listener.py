@@ -108,26 +108,35 @@ def _read_channel_history(client: WebClient, channel_id: str, limit: int = 20) -
 # ---------------------------------------------------------------------------
 
 
-def _make_session_closed_callback(client: WebClient):
-    """Return a callback that posts Mechanic results back to Slack.
+def _make_session_closed_callback(client: WebClient, factory_floor_channel: str | None = None):
+    """Return a callback that posts Mechanic results to the factory floor.
 
-    The returned function is meant to be called by the session manager's
-    idle-checker when a session is closed and the Mechanic phase completes.
+    Mechanic results are operational — they go to ``#<slug>-floor`` (where
+    the human mechanic works), NOT to the customer's channel. The customer
+    never sees mechanic verdicts, errors, or skips. Every session closure
+    produces a visible result on the factory floor so the mechanic knows
+    the system is working.
     """
 
     def on_session_closed(session: Session, result: dict | None) -> None:
         if result is None:
             return
 
-        channel = session.channel_id
+        # Mechanic results go to the factory floor. Fall back to the
+        # session's channel if no factory floor is configured (e.g., tests).
+        channel = factory_floor_channel or session.channel_id
         status = result.get("status")
+        run_id = result.get("run_id", "unknown")
 
         try:
             if status == "approved":
                 pr_url = result.get("pr_url", "")
                 client.chat_postMessage(
                     channel=channel,
-                    text=f"\u2705 Changes approved \u2014 PR created: {pr_url}",
+                    text=(
+                        f":wrench: *Mechanic result* (`{run_id}`)\n"
+                        f"\u2705 Changes approved \u2014 PR created: {pr_url}"
+                    ),
                 )
 
             elif status == "linear_proposed":
@@ -136,6 +145,7 @@ def _make_session_closed_callback(client: WebClient):
                 client.chat_postMessage(
                     channel=channel,
                     text=(
+                        f":wrench: *Mechanic result* (`{run_id}`)\n"
                         f"\U0001f4a1 Findings worth tracking:\n{reason}\n\n"
                         "React \u2705 to create a Linear issue, or \u274c to skip."
                     ),
@@ -146,22 +156,48 @@ def _make_session_closed_callback(client: WebClient):
                 reason = verdict.get("reason", "Unknown")
                 client.chat_postMessage(
                     channel=channel,
-                    text=f"\U0001f50d Session analyzed \u2014 no changes kept. {reason[:200]}",
+                    text=(
+                        f":wrench: *Mechanic result* (`{run_id}`)\n"
+                        f"\U0001f50d No changes kept. {reason[:200]}"
+                    ),
                 )
 
-            elif status == "error":
-                error = result.get("error", "Unknown error")
+            elif status == "no_changes":
                 client.chat_postMessage(
                     channel=channel,
-                    text=f"\u26a0\ufe0f Session closed with error: {scrub_secrets(error[:300])}",
+                    text=(
+                        f":wrench: *Mechanic result* (`{run_id}`)\n"
+                        "No file changes detected — nothing to review."
+                    ),
+                )
+
+            elif status == "mechanic_skipped":
+                error = result.get("error", "Unknown reason")
+                client.chat_postMessage(
+                    channel=channel,
+                    text=(
+                        f":wrench: *Mechanic result* (`{run_id}`)\n"
+                        f":fast_forward: Session analysis skipped: {scrub_secrets(error[:200])}"
+                    ),
                 )
 
             elif status == "mechanic_error":
                 client.chat_postMessage(
                     channel=channel,
                     text=(
+                        f":wrench: *Mechanic result* (`{run_id}`)\n"
                         ":gear: Session analysis failed — the Mechanic could not produce "
                         "a valid verdict. This has been logged for investigation."
+                    ),
+                )
+
+            elif status == "error":
+                error = result.get("error", "Unknown error")
+                client.chat_postMessage(
+                    channel=channel,
+                    text=(
+                        f":wrench: *Mechanic result* (`{run_id}`)\n"
+                        f"\u26a0\ufe0f Session closed with error: {scrub_secrets(error[:300])}"
                     ),
                 )
 
@@ -170,11 +206,20 @@ def _make_session_closed_callback(client: WebClient):
                 scrubbed = scrub_secrets(error.split("\n")[0][:200]) if error else "Unknown crash"
                 client.chat_postMessage(
                     channel=channel,
-                    text=f":boom: Worker crashed: {scrubbed}",
+                    text=(
+                        f":wrench: *Mechanic result* (`{run_id}`)\n"
+                        f":boom: Worker crashed: {scrubbed}"
+                    ),
                 )
 
-            # "no_changes" -- say nothing
-            # "mechanic_skipped" -- say nothing (deployment issue, not user-facing)
+            elif status == "timeout":
+                client.chat_postMessage(
+                    channel=channel,
+                    text=(
+                        f":wrench: *Mechanic result* (`{run_id}`)\n"
+                        ":hourglass: Session timed out during mechanic analysis."
+                    ),
+                )
 
         except Exception:
             log.warning(
@@ -296,7 +341,10 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
     session_manager = SessionManager(config)
 
     # Wire up the session-close callback so Mechanic results reach Slack.
-    session_manager.on_session_closed = _make_session_closed_callback(app.client)
+    session_manager.on_session_closed = _make_session_closed_callback(
+        app.client,
+        factory_floor_channel=config.harness.workspace.channels.factory_floor,
+    )
 
     # -- Assistant class (handles DM / assistant-panel threads) --------------
 

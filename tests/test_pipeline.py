@@ -1878,154 +1878,129 @@ class TestSlackMentionHandler:
 
 
 class TestSessionClosedCallback:
-    """Test _make_session_closed_callback posts correct messages."""
+    """Test _make_session_closed_callback posts mechanic results to factory floor."""
 
-    def _make_session(self, channel_id="C_TEST"):
+    FLOOR_CHANNEL = "C_FLOOR"
+
+    def _make_session(self, channel_id="C_CUSTOMER"):
         session = MagicMock()
         session.channel_id = channel_id
         return session
 
-    def test_approved_posts_pr_url(self):
+    def _make_callback(self, client):
         from pipeline.slack_listener import _make_session_closed_callback
+        return _make_session_closed_callback(client, factory_floor_channel=self.FLOOR_CHANNEL)
 
+    def test_approved_posts_to_factory_floor(self):
         client = MagicMock()
-        callback = _make_session_closed_callback(client)
-
+        callback = self._make_callback(client)
         session = self._make_session()
-        result = {"status": "approved", "pr_url": "https://github.com/org/repo/pull/42"}
+        result = {"status": "approved", "run_id": "run-1", "pr_url": "https://github.com/org/repo/pull/42"}
 
         callback(session, result)
 
         client.chat_postMessage.assert_called_once()
         call_kwargs = client.chat_postMessage.call_args[1]
-        assert call_kwargs["channel"] == "C_TEST"
+        assert call_kwargs["channel"] == self.FLOOR_CHANNEL  # factory floor, NOT customer channel
+        assert "Mechanic result" in call_kwargs["text"]
         assert "PR created" in call_kwargs["text"]
         assert "pull/42" in call_kwargs["text"]
 
     def test_rejected_posts_reason(self):
-        from pipeline.slack_listener import _make_session_closed_callback
-
         client = MagicMock()
-        callback = _make_session_closed_callback(client)
-
+        callback = self._make_callback(client)
         session = self._make_session()
-        result = {"status": "rejected", "verdict": {"reason": "Bad code quality"}}
+        result = {"status": "rejected", "run_id": "run-2", "verdict": {"reason": "Bad code quality"}}
 
         callback(session, result)
 
-        client.chat_postMessage.assert_called_once()
         call_kwargs = client.chat_postMessage.call_args[1]
-        assert "no changes kept" in call_kwargs["text"]
+        assert call_kwargs["channel"] == self.FLOOR_CHANNEL
+        assert "No changes kept" in call_kwargs["text"]
         assert "Bad code quality" in call_kwargs["text"]
 
-    def test_linear_proposed_posts_proposal(self):
-        from pipeline.slack_listener import _make_session_closed_callback
-
+    def test_no_changes_posts_to_floor(self):
         client = MagicMock()
-        callback = _make_session_closed_callback(client)
-
+        callback = self._make_callback(client)
         session = self._make_session()
-        result = {
-            "status": "linear_proposed",
-            "linear_proposal": {"reason": "Found interesting patterns"},
-        }
+        result = {"status": "no_changes", "run_id": "run-3"}
 
         callback(session, result)
 
-        client.chat_postMessage.assert_called_once()
         call_kwargs = client.chat_postMessage.call_args[1]
-        assert "Findings worth tracking" in call_kwargs["text"]
-        assert "Found interesting patterns" in call_kwargs["text"]
+        assert call_kwargs["channel"] == self.FLOOR_CHANNEL
+        assert "No file changes detected" in call_kwargs["text"]
+
+    def test_mechanic_skipped_posts_to_floor(self):
+        client = MagicMock()
+        callback = self._make_callback(client)
+        session = self._make_session()
+        result = {"status": "mechanic_skipped", "run_id": "run-4", "error": "No module named 'claude_agent_sdk'"}
+
+        callback(session, result)
+
+        call_kwargs = client.chat_postMessage.call_args[1]
+        assert call_kwargs["channel"] == self.FLOOR_CHANNEL
+        assert "skipped" in call_kwargs["text"].lower()
+        assert "claude_agent_sdk" in call_kwargs["text"]
 
     def test_error_posts_error_message(self):
-        from pipeline.slack_listener import _make_session_closed_callback
-
         client = MagicMock()
-        callback = _make_session_closed_callback(client)
-
+        callback = self._make_callback(client)
         session = self._make_session()
-        result = {"status": "error", "error": "Container died unexpectedly"}
+        result = {"status": "error", "run_id": "run-5", "error": "Container died unexpectedly"}
 
         callback(session, result)
 
-        client.chat_postMessage.assert_called_once()
         call_kwargs = client.chat_postMessage.call_args[1]
-        assert "error" in call_kwargs["text"].lower()
+        assert call_kwargs["channel"] == self.FLOOR_CHANNEL
         assert "Container died" in call_kwargs["text"]
 
-    def test_session_closed_callback_handles_mechanic_error(self):
-        from pipeline.slack_listener import _make_session_closed_callback
-
+    def test_mechanic_error_posts_to_floor(self):
         client = MagicMock()
-        callback = _make_session_closed_callback(client)
-
+        callback = self._make_callback(client)
         session = self._make_session()
-        result = {"status": "mechanic_error", "error": "bad mechanic verdict"}
+        result = {"status": "mechanic_error", "run_id": "run-6", "error": "bad verdict"}
 
         callback(session, result)
 
-        client.chat_postMessage.assert_called_once()
         call_kwargs = client.chat_postMessage.call_args[1]
-        assert call_kwargs["channel"] == "C_TEST"
+        assert call_kwargs["channel"] == self.FLOOR_CHANNEL
         assert ":gear:" in call_kwargs["text"]
         assert "valid verdict" in call_kwargs["text"]
 
-    def test_session_closed_callback_handles_worker_crash(self):
-        from pipeline.slack_listener import _make_session_closed_callback
-
+    def test_worker_crash_posts_to_floor(self):
         client = MagicMock()
-        callback = _make_session_closed_callback(client)
-
+        callback = self._make_callback(client)
         session = self._make_session()
         result = {
             "status": "worker_crashed",
+            "run_id": "run-7",
             "error": "RuntimeError: oops\nTraceback (most recent call last): ...",
         }
 
         callback(session, result)
 
-        client.chat_postMessage.assert_called_once()
         call_kwargs = client.chat_postMessage.call_args[1]
-        assert call_kwargs["channel"] == "C_TEST"
+        assert call_kwargs["channel"] == self.FLOOR_CHANNEL
         assert ":boom:" in call_kwargs["text"]
         assert "RuntimeError: oops" in call_kwargs["text"]
         assert "Traceback" not in call_kwargs["text"]
 
-    def test_no_changes_says_nothing(self):
-        from pipeline.slack_listener import _make_session_closed_callback
-
-        client = MagicMock()
-        callback = _make_session_closed_callback(client)
-
-        session = self._make_session()
-        result = {"status": "no_changes"}
-
-        callback(session, result)
-
-        client.chat_postMessage.assert_not_called()
-
     def test_none_result_says_nothing(self):
-        from pipeline.slack_listener import _make_session_closed_callback
-
         client = MagicMock()
-        callback = _make_session_closed_callback(client)
-
+        callback = self._make_callback(client)
         session = self._make_session()
         callback(session, None)
-
         client.chat_postMessage.assert_not_called()
 
     def test_client_error_handled_gracefully(self):
         """Slack API errors should not propagate."""
-        from pipeline.slack_listener import _make_session_closed_callback
-
         client = MagicMock()
         client.chat_postMessage.side_effect = Exception("Slack API down")
-        callback = _make_session_closed_callback(client)
-
+        callback = self._make_callback(client)
         session = self._make_session()
-        result = {"status": "approved", "pr_url": "https://example.com/pr/1"}
-
+        result = {"status": "approved", "run_id": "run-8", "pr_url": "https://example.com/pr/1"}
         # Should not raise
         callback(session, result)
 
