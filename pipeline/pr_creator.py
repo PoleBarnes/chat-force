@@ -78,18 +78,26 @@ class PRCreator:
         container_id = changeset.get("worker_container")
         tmp_dir = tempfile.mkdtemp(prefix=f"pr-{self.run_id}-")
 
-        # Build authenticated clone URL and env for gh CLI
+        # Authenticate via a credential helper — NEVER embed the token in
+        # the URL, which would leak in git error messages, process listings,
+        # and logs. We write a short-lived askpass script that echoes the
+        # token on stdin when git asks for credentials.
         repo_url = self.config.config_repo_url
-        if repo_url.startswith("https://") and "@" not in repo_url:
-            repo_url = repo_url.replace("https://", f"https://{github_token}@")
+
+        askpass_script = os.path.join(tmp_dir, ".git-askpass.sh")
+        with open(askpass_script, "w") as f:
+            f.write(f"#!/bin/sh\necho '{github_token}'\n")
+        os.chmod(askpass_script, 0o700)
 
         git_env = os.environ.copy()
         git_env["GH_TOKEN"] = github_token
+        git_env["GIT_ASKPASS"] = askpass_script
+        git_env["GIT_TERMINAL_PROMPT"] = "0"
 
         try:
-            # 1. Clone the repo into a temp directory
+            # 1. Clone the repo into a temp directory (auth via GIT_ASKPASS)
             log.info("[%s] Cloning into temp dir", self.run_id)
-            _run(["git", "clone", "--depth=1", repo_url, tmp_dir])
+            _run(["git", "clone", "--depth=1", repo_url, tmp_dir], env=git_env)
 
             # 2. Create and checkout the branch
             log.info("[%s] Creating branch %s", self.run_id, branch)

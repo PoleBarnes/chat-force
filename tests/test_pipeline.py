@@ -3634,8 +3634,13 @@ class TestPRCreatorAuth:
             with pytest.raises(RuntimeError, match="Missing.*GITHUB_TOKEN"):
                 pr.create(changeset, verdict)
 
-    def test_create_uses_authenticated_clone_url(self, config):
-        """create() should inject token into HTTPS clone URL."""
+    def test_create_uses_credential_helper_not_url_token(self, config):
+        """create() should authenticate via GIT_ASKPASS, NOT embed token in URL.
+
+        The token must never appear in the clone URL — that would leak in
+        git error messages, process listings, and logs. Instead we use a
+        credential helper (GIT_ASKPASS script).
+        """
         pr = PRCreator(config, "test-run")
         changeset = {
             "git_changes": {"file_contents": {"a.py": "x=1"}},
@@ -3648,8 +3653,6 @@ class TestPRCreatorAuth:
         def capture_run(cmd, *, cwd=None, check=True, env=None):
             commands.append({"cmd": cmd, "env": env})
             if cmd[0] == "git" and cmd[1] == "clone":
-                # Create the temp dir so subsequent commands work
-                import shutil
                 os.makedirs(cmd[-1], exist_ok=True)
                 subprocess.run(["git", "init"], cwd=cmd[-1], capture_output=True)
                 subprocess.run(["git", "config", "user.name", "test"], cwd=cmd[-1], capture_output=True)
@@ -3666,7 +3669,16 @@ class TestPRCreatorAuth:
                 pr.create(changeset, verdict)
 
         clone_cmd = next(c for c in commands if c["cmd"][1] == "clone")
-        assert "ghp_test123@github.com" in clone_cmd["cmd"][-2]  # URL has token
+        clone_url = clone_cmd["cmd"][-2]  # the URL arg to git clone
+        clone_env = clone_cmd["env"]
+
+        # Token MUST NOT be in the URL
+        assert "ghp_test123" not in clone_url, "Token leaked into clone URL!"
+        assert "@github.com" not in clone_url, "Token embedded in URL"
+
+        # GIT_ASKPASS MUST be set in the env
+        assert "GIT_ASKPASS" in clone_env
+        assert clone_env["GIT_TERMINAL_PROMPT"] == "0"
 
     def test_create_passes_gh_token_to_gh_cli(self, config):
         """create() should set GH_TOKEN env for gh pr create."""
