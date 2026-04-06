@@ -16,12 +16,12 @@ These are the items that must be true before the first customer deployment goes 
 
 ### Engine / Harness Architecture
 
-- [ ] Engine loads a harness from `HARNESS_PATH` env var
-- [ ] `HarnessLoader` validates all required files at startup, fails loud with exact paths on any missing/invalid piece
-- [ ] Engine code contains zero customer-specific content (no persona, no skills, no eval criteria hardcoded)
-- [ ] `worker/Dockerfile` does not bake customer files into the image; harness is mounted/copied at runtime
-- [ ] All four required harness sections are wired end-to-end: `identity/`, `eval/`, `skills/`, `mechanic-log/`
-- [ ] `workspace.yaml` schema is parsed and applied (channel IDs, access allowlist, limits, git identity, token env var references)
+- [x] Engine loads a harness from `HARNESS_PATH` env var
+- [x] `HarnessLoader` validates all required files at startup, fails loud with exact paths on any missing/invalid piece
+- [x] Engine code contains zero customer-specific content (no persona, no skills, no eval criteria hardcoded)
+- [x] `worker/Dockerfile` does not bake customer files into the image; harness is mounted/copied at runtime
+- [x] All four required harness sections are wired end-to-end: `identity/`, `eval/`, `skills/`, `mechanic-log/`
+- [x] `workspace.yaml` schema is parsed and applied (channel IDs, access allowlist, limits, git identity, token env var references)
 
 ### First Customer Harness (dogfood target or first paying customer)
 
@@ -40,38 +40,38 @@ These are the items that must be true before the first customer deployment goes 
 - [ ] Four channels created per customer: `#<slug>-intake`, `#<slug>-floor`, `#<slug>-mechanic-log`, `#<slug>-assets`
 - [ ] Channel IDs written into `workspace.yaml`
 - [ ] Listener routes messages differently based on channel role (intake has eval gate; floor allows free prototyping; mechanic-log is engine-write-only; assets is knowledge base)
-- [ ] User allowlist enforced — unauthorized Slack users cannot trigger the bot
+- [x] User allowlist enforced — unauthorized Slack users cannot trigger the bot
 
 ### Correctness
 
-- [ ] Multi-turn conversation works end-to-end (send message → receive response → send follow-up → receive second response) with zero race conditions
-- [ ] Session state survives listener restart (persisted to SQLite or equivalent; reconciled against `docker ps` on boot)
-- [ ] Approved verdicts persist to disk immediately so they survive a crash between approval and PR creation
-- [ ] Mechanic Agent uses structured output for verdicts (no fragile JSON text parsing)
-- [ ] Mechanic parse failures surface as distinct error state, not silent rejection storms
-- [ ] Worker crash produces `/tmp/worker-error.txt`; host surfaces the error to the user within seconds, not minutes
-- [ ] `wait_for_completion` timeout actually kills the container before raising
+- [x] Multi-turn conversation works end-to-end (send message → receive response → send follow-up → receive second response) with zero race conditions
+- [x] Session state survives listener restart (persisted to SQLite or equivalent; reconciled against `docker ps` on boot)
+- [x] Approved verdicts persist to disk immediately so they survive a crash between approval and PR creation
+- [x] Mechanic Agent uses structured output for verdicts (no fragile JSON text parsing)
+- [x] Mechanic parse failures surface as distinct error state, not silent rejection storms
+- [x] Worker crash produces `/tmp/worker-error.txt`; host surfaces the error to the user within seconds, not minutes
+- [x] `wait_for_completion` timeout actually kills the container before raising
 
 ### Security (all Critical findings from review must be fixed)
 
-- [ ] Slack user allowlist enforced at handler entry
+- [x] Slack user allowlist enforced at handler entry
 - [ ] `ANTHROPIC_API_KEY` scoped/isolated from the user-controlled Worker sandbox (or proxied)
-- [ ] `GITHUB_TOKEN` never embedded in command-line URLs, never logged; uses credential helper
-- [ ] Worker container runs with `cap_drop=ALL`, `no-new-privileges`, `mem_limit`, `cpu_quota`, `pids_limit`
+- [x] `GITHUB_TOKEN` never embedded in command-line URLs, never logged; uses credential helper
+- [x] Worker container runs with `cap_drop=ALL`, `no-new-privileges`, `mem_limit`, `cpu_quota`, `pids_limit`
 - [ ] Worker has restricted egress (allowlist of necessary domains, not full internet)
-- [ ] `.github/workflows/`, `worker/Dockerfile`, `pipeline/`, `mechanic/` are on a deny-list for worker modifications
-- [ ] Changeset extractor uses list-form subprocess calls, not shell interpolation; path traversal rejected in `PRCreator._write_file`
+- [x] `.github/workflows/`, `worker/Dockerfile`, `pipeline/`, `mechanic/` are on a deny-list for worker modifications
+- [x] Changeset extractor uses list-form subprocess calls, not shell interpolation; path traversal rejected in `PRCreator._write_file`
 - [ ] Secret scanner (gitleaks/trufflehog) runs on every changeset before PR creation; any finding blocks the PR
-- [ ] Exception messages surfaced to Slack are scrubbed of tokens and sensitive data
+- [x] Exception messages surfaced to Slack are scrubbed of tokens and sensitive data
 
 ### Reliability / Operations
 
 - [ ] Listener runs under systemd (`Restart=always`, `OOMPolicy=continue`, explicit memory limit)
-- [ ] Every external call (Claude API, Docker API, GitHub API, Slack API) has retry with exponential backoff on transient errors
-- [ ] `max_budget_usd`, `max_turns`, `IDLE_TIMEOUT` are plumbed from `workspace.yaml` into the Worker container env (no hardcoded defaults silently applied)
-- [ ] Disk cleanup thread runs hourly; `/var/lib/chat-force/runs/` older than N days is pruned
-- [ ] Container reconciliation on listener startup — orphans from prior runs are identified and either reattached or force-removed
-- [ ] Global concurrency cap enforced via semaphore — single user cannot spawn unlimited containers
+- [x] Every external call (Claude API, Docker API, GitHub API, Slack API) has retry with exponential backoff on transient errors
+- [x] `max_budget_usd`, `max_turns`, `IDLE_TIMEOUT` are plumbed from `workspace.yaml` into the Worker container env (no hardcoded defaults silently applied)
+- [x] Disk cleanup thread runs hourly; `/var/lib/chat-force/runs/` older than N days is pruned
+- [x] Container reconciliation on listener startup — orphans from prior runs are identified and either reattached or force-removed
+- [x] Global concurrency cap enforced via semaphore — single user cannot spawn unlimited containers
 
 ### Observability
 
