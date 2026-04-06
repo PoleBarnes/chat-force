@@ -2726,7 +2726,7 @@ class TestWorkerEntrypoint:
     """Test worker/entrypoint.py functions for the Agent SDK worker."""
 
     def test_build_system_prompt_includes_identity_files(self, tmp_path):
-        """System prompt should combine harness identity files in order."""
+        """System prompt should combine ROLE.md + harness identity files in order."""
         from worker.entrypoint import build_system_prompt
 
         identity_dir = tmp_path / "identity"
@@ -2739,13 +2739,17 @@ class TestWorkerEntrypoint:
 
         prompt = build_system_prompt(str(tmp_path))
 
-        assert prompt == (
-            "# MISSION\nMission stub.\n\n"
-            "# BRAND\nBrand stub.\n\n"
-            "# AVATAR\nAvatar stub.\n\n"
-            "# NEVER\nNever stub.\n\n"
-            "# PERSONA\nPersona stub.\n\n"
-        )
+        # ROLE.md is prepended (engine-level prototyper instructions)
+        assert "PROTOTYPER" in prompt
+        assert "Mechanic" in prompt
+        # Identity files follow in order
+        assert "# MISSION\nMission stub." in prompt
+        assert "# BRAND\nBrand stub." in prompt
+        assert "# AVATAR\nAvatar stub." in prompt
+        assert "# NEVER\nNever stub." in prompt
+        assert "# PERSONA\nPersona stub." in prompt
+        # ROLE comes before MISSION
+        assert prompt.index("PROTOTYPER") < prompt.index("# MISSION")
 
     def test_build_system_prompt_raises_on_missing_identity_file(self, tmp_path):
         """System prompt must fail loud if any required identity file is missing.
@@ -3367,7 +3371,9 @@ class TestEntrypointHelpers:
 
         prompt = build_system_prompt(str(tmp_path))
 
-        assert prompt.startswith("# MISSION\n")
+        # Prompt starts with ROLE.md, then identity sections
+        assert "PROTOTYPER" in prompt
+        assert "# MISSION\n" in prompt
         assert "# BRAND\n" in prompt
         assert "# AVATAR\n" in prompt
         assert "# NEVER\n" in prompt

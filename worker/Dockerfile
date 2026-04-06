@@ -14,6 +14,7 @@ RUN useradd --create-home --shell /bin/sh worker \
 RUN pip install --no-cache-dir claude-agent-sdk
 
 COPY worker/entrypoint.py /app/entrypoint.py
+COPY worker/ROLE.md /app/ROLE.md
 
 USER worker
 

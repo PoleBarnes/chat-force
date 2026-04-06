@@ -25,17 +25,29 @@ REQUIRED_IDENTITY_FILES: tuple[tuple[str, str], ...] = (
 
 
 def build_system_prompt(harness_dir: str) -> str:
-    """Assemble the Worker's system prompt from the harness identity files.
+    """Assemble the Worker's system prompt from ROLE.md + harness identity files.
 
-    Reads ``{harness_dir}/identity/{mission,brand,avatar,never-list,bot-persona}.md``
-    in order and concatenates them under the section headings MISSION, BRAND,
-    AVATAR, NEVER, PERSONA. Every file is required — HarnessLoader validation
-    normally catches a missing file upstream, but this function is also the
-    last defense against a broken bind mount or a runtime file deletion, so
-    it raises ``FileNotFoundError`` loudly rather than producing a silently
-    truncated system prompt (CLAUDE.md "fail loud, never silent").
+    The system prompt has two layers:
+    1. ROLE.md (engine-level, universal) — tells the Worker it's a prototyper
+       and explains the Mechanic feedback loop
+    2. Identity files (harness-level, per-customer) — mission, brand, avatar,
+       never-list, bot-persona
+
+    Every identity file is required — HarnessLoader validation normally catches
+    a missing file upstream, but this function is the last defense.
     """
     sections = []
+
+    # Layer 1: universal prototyper role briefing (bundled with the entrypoint).
+    # In Docker: /app/ROLE.md (same dir as entrypoint.py).
+    # In tests: worker/ROLE.md (relative to the test's working dir).
+    role_path = Path(__file__).parent / "ROLE.md"
+    if not role_path.is_file():
+        role_path = Path("/app/ROLE.md")
+    if role_path.is_file():
+        sections.append(role_path.read_text(encoding="utf-8").rstrip() + "\n\n")
+
+    # Layer 2: per-customer identity from the harness
     identity_dir = Path(harness_dir) / "identity"
 
     for filename, header in REQUIRED_IDENTITY_FILES:
