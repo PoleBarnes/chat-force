@@ -35,5 +35,7 @@ Thumbs.db
 *~
 output/
 
-# Claude Code local state
-.claude/
+# Claude Code local state (in the engine repo root only)
+/.claude/
+# But allow .claude/ inside templates (they're tracked content)
+!templates/**/.claude/

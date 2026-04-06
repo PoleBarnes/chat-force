@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+#
+# chat-force — self-improving prototyping tool
+#
+# Chains two Claude Code CLI sessions:
+#   1. Prototype: full-power prototyping with orchestrator instructions
+#   2. Mechanic: analyzes the session, proposes harness improvements
+#
+set -euo pipefail
+
+CHAT_FORCE_VERSION="0.1.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEMPLATES_DIR="$SCRIPT_DIR/templates"
+MECHANIC_PROMPT="$TEMPLATES_DIR/mechanic-prompt.md"
+
+BLUE='\033[0;34m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+info()  { echo -e "${BLUE}[chat-force]${NC} $*"; }
+ok()    { echo -e "${GREEN}[chat-force]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[chat-force]${NC} $*"; }
+error() { echo -e "${RED}[chat-force]${NC} $*" >&2; }
+
+require_claude() {
+    if ! command -v claude &>/dev/null; then
+        error "Claude Code CLI not found."
+        exit 1
+    fi
+}
+
+require_project() {
+    if [[ ! -f "CLAUDE.md" ]]; then
+        error "Not a chat-force project (no CLAUDE.md). Run 'chat-force init' first."
+        exit 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# prototype — run a prototyping session, then hand off to mechanic
+# ---------------------------------------------------------------------------
+cmd_prototype() {
+    require_claude
+    require_project
+
+    info "Starting prototyping session..."
+    info "Type /exit or Ctrl+C when done."
+    echo ""
+
+    # Mark the time so we can find the session transcript after
+    touch /tmp/chat-force-session-marker
+
+    # Run Claude Code CLI — pass all extra args through
+    local exit_code=0
+    claude "$@" || exit_code=$?
+
+    echo ""
+    if [[ $exit_code -ne 0 ]] && [[ $exit_code -ne 130 ]]; then
+        warn "Session exited with code $exit_code"
+    fi
+
+    info "Prototype session complete."
+    local response
+    read -r -p "$(echo -e "${BLUE}[chat-force]${NC} Launch mechanic review? [Y/n] ")" response
+    response=${response:-Y}
+
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        echo ""
+        cmd_mechanic "$@"
+    else
+        info "Skipping mechanic. Run 'chat-force mechanic' to review later."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# mechanic — analyze the most recent session and propose improvements
+# ---------------------------------------------------------------------------
+cmd_mechanic() {
+    require_claude
+    require_project
+
+    info "🔧 Launching mechanic review..."
+    echo ""
+
+    local task
+    task="You are the Mechanic. Analyze the most recent prototyping session.
+
+Read the git diff to see what changed during the session:
+  git diff
+
+Read recent commits:
+  git log --oneline -5
+
+Then follow your process:
+1. Analyze what was built — correctness, quality, completeness
+2. Check orchestration quality — did the prototyper delegate to sub-agents?
+3. Check for security issues, scope creep, unnecessary changes
+4. Propose improvements to the harness:
+   - New skills → .claude/skills/<name>/SKILL.md
+   - New rules → .claude/rules/<name>.md
+   - Agent definitions → .claude/agents/<name>.md
+   - CLAUDE.md updates
+   - Vault updates
+5. Present EACH proposal one at a time — wait for my approval
+6. Install approved changes and commit with descriptive messages
+7. Log all proposals to .mechanic/log/
+
+Focus on what would make the NEXT session better. Be specific, not vague."
+
+    if [[ -f "$MECHANIC_PROMPT" ]]; then
+        claude --system-prompt "$MECHANIC_PROMPT" -p "$task"
+    else
+        warn "Mechanic prompt not found at $MECHANIC_PROMPT"
+        claude -p "$task"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# init — scaffold a new project
+# ---------------------------------------------------------------------------
+cmd_init() {
+    local template="general"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --template) template="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    local tpl="$TEMPLATES_DIR/$template"
+    if [[ ! -d "$tpl" ]]; then
+        error "Template '$template' not found."
+        exit 1
+    fi
+
+    info "Initializing project (template: $template)..."
+
+    # CLAUDE.md
+    if [[ ! -f "CLAUDE.md" ]]; then
+        cp "$tpl/CLAUDE.md" ./CLAUDE.md
+        ok "  Created CLAUDE.md"
+    else
+        warn "  CLAUDE.md exists — skipping"
+    fi
+
+    # .claude directory
+    mkdir -p .claude/rules .claude/skills .claude/agents
+    [[ -f "$tpl/.claude/settings.json" ]] && [[ ! -f ".claude/settings.json" ]] && \
+        cp "$tpl/.claude/settings.json" .claude/settings.json && ok "  Created .claude/settings.json"
+
+    for rule in "$tpl/.claude/rules/"*.md; do
+        [[ -f "$rule" ]] || continue
+        local bn; bn=$(basename "$rule")
+        [[ ! -f ".claude/rules/$bn" ]] && cp "$rule" ".claude/rules/$bn" && ok "  Created .claude/rules/$bn"
+    done
+
+    # vault
+    if [[ ! -d "vault" ]]; then
+        mkdir -p vault/{raw,summaries/sources,summaries/sessions,entities,concepts,decisions}
+        for vf in VAULT.md index.md log.md; do
+            [[ -f "$tpl/vault/$vf" ]] && cp "$tpl/vault/$vf" "vault/$vf"
+        done
+        ok "  Created vault/"
+    else
+        warn "  vault/ exists — skipping"
+    fi
+
+    # .mechanic
+    mkdir -p .mechanic/log
+    ok "  Created .mechanic/log/"
+
+    echo ""
+    ok "Done! Edit CLAUDE.md, then run 'chat-force prototype'"
+}
+
+# ---------------------------------------------------------------------------
+# help
+# ---------------------------------------------------------------------------
+cmd_help() {
+    cat <<EOF
+chat-force v${CHAT_FORCE_VERSION} — self-improving prototyping tool
+
+Usage:
+  chat-force prototype [args]     Prototype session → mechanic handoff
+  chat-force mechanic [args]      Mechanic review of current project
+  chat-force init [--template T]  Scaffold a new project
+  chat-force help                 This help
+
+Project structure:
+  CLAUDE.md              Identity and instructions
+  vault/                 Knowledge base
+  .claude/rules/         Rules (brand, eval, never-list)
+  .claude/skills/        Skills (grown by mechanic)
+  .claude/agents/        Sub-agents (grown by mechanic)
+  .mechanic/log/         Proposal history
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+case "${1:-help}" in
+    prototype)  shift; cmd_prototype "$@" ;;
+    mechanic)   shift; cmd_mechanic "$@" ;;
+    init)       shift; cmd_init "$@" ;;
+    help|--help|-h) cmd_help ;;
+    version|--version|-v) echo "chat-force v${CHAT_FORCE_VERSION}" ;;
+    *) error "Unknown command: $1"; cmd_help; exit 1 ;;
+esac
