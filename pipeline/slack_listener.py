@@ -174,6 +174,7 @@ def _make_session_closed_callback(client: WebClient):
                 )
 
             # "no_changes" -- say nothing
+            # "mechanic_skipped" -- say nothing (deployment issue, not user-facing)
 
         except Exception:
             log.warning(

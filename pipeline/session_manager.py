@@ -686,6 +686,18 @@ class SessionManager:
             summary["status"] = "worker_crashed"
             summary["error"] = str(exc)[:500]
 
+        except ImportError as exc:
+            # Missing dependency (e.g., claude-agent-sdk not installed).
+            # This is a deployment/operational issue, not a session failure.
+            # Log it but don't surface to the user — they can't fix it.
+            log.error(
+                "[%s] Mechanic phase skipped — missing dependency: %s. "
+                "Add claude-agent-sdk to the listener's --with deps.",
+                run_id, exc,
+            )
+            summary["status"] = "mechanic_skipped"
+            summary["error"] = f"Missing dependency: {exc}"
+
         except Exception as exc:
             log.error("[%s] Mechanic phase error: %s", run_id, exc, exc_info=True)
             summary["status"] = "error"
