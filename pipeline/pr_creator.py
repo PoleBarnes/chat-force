@@ -76,7 +76,8 @@ class PRCreator:
         branch = self._make_branch_name(pr_title)
         file_contents = changeset.get("git_changes", {}).get("file_contents", {})
         container_id = changeset.get("worker_container")
-        tmp_dir = tempfile.mkdtemp(prefix=f"pr-{self.run_id}-")
+        tmp_parent = tempfile.mkdtemp(prefix=f"pr-{self.run_id}-")
+        tmp_dir = os.path.join(tmp_parent, "repo")
 
         # Authenticate via a credential helper — NEVER embed the token in
         # the URL, which would leak in git error messages, process listings,
@@ -84,7 +85,7 @@ class PRCreator:
         # token on stdin when git asks for credentials.
         repo_url = self.config.config_repo_url
 
-        askpass_script = os.path.join(tmp_dir, ".git-askpass.sh")
+        askpass_script = os.path.join(tmp_parent, ".git-askpass.sh")
         with open(askpass_script, "w") as f:
             f.write(f"#!/bin/sh\necho '{github_token}'\n")
         os.chmod(askpass_script, 0o700)
@@ -160,7 +161,7 @@ class PRCreator:
             return pr_url
 
         finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            shutil.rmtree(tmp_parent, ignore_errors=True)
 
     # -- internals ------------------------------------------------------------
 
