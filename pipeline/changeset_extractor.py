@@ -23,6 +23,17 @@ from pipeline.config import PipelineConfig
 
 log = logging.getLogger(__name__)
 
+# Paths the Worker must never modify. If a changeset contains files under
+# any of these prefixes, the changeset is flagged as REJECTED_SELF_MODIFICATION.
+# This prevents the Worker from tampering with the engine, CI, or test suite.
+SELF_MODIFICATION_DENY_LIST = (
+    ".github/",
+    "worker/",
+    "pipeline/",
+    "mechanic/",
+    "tests/",
+)
+
 NOISE_PATTERNS = [
     "/tmp/",
     "/var/log/",
@@ -87,8 +98,40 @@ class ChangesetExtractor:
         bundle["output_files"] = self._extract_output_files(container, container_id)
         bundle["bundle_path"] = self.run_dir
 
+        # Check for self-modification attempts
+        denied = self._check_self_modification(bundle["git_changes"])
+        if denied:
+            bundle["self_modification_denied"] = denied
+            log.warning(
+                "[%s] Self-modification denied: %s", self.run_id, denied,
+            )
+
         self._save_bundle(bundle)
         return bundle
+
+    # -- Self-modification guard -----------------------------------------------
+
+    @staticmethod
+    def _check_self_modification(git_changes: dict) -> list[str]:
+        """Return a list of file paths that violate the self-modification deny-list.
+
+        If any changed, new, or deleted file starts with a denied prefix
+        (e.g., ``pipeline/``, ``worker/``, ``.github/``), it is flagged.
+        The caller decides what to do — typically block the PR.
+        """
+        all_paths = (
+            git_changes.get("new_files", [])
+            + git_changes.get("modified_files", [])
+            + git_changes.get("deleted_files", [])
+        )
+        denied: list[str] = []
+        for fpath in all_paths:
+            normalized = fpath.lstrip("/")
+            for prefix in SELF_MODIFICATION_DENY_LIST:
+                if normalized.startswith(prefix):
+                    denied.append(fpath)
+                    break
+        return denied
 
     # -- Layer 1: Git diff ----------------------------------------------------
 

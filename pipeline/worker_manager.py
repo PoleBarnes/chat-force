@@ -80,6 +80,12 @@ class WorkerManager:
             labels=labels,
             network=self.config.docker_network,
             detach=True,
+            # Security hardening — drop all capabilities, prevent privilege
+            # escalation, and cap resource usage.
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges"],
+            mem_limit="2g",
+            pids_limit=256,
         )
 
         container_id = self._container.id

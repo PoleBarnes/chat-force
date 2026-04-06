@@ -173,8 +173,17 @@ class PRCreator:
 
         Tries the in-memory file_contents dict first; falls back to
         ``docker cp`` from the worker container if the content isn't cached.
+
+        Raises ``ValueError`` if the resolved destination path escapes the
+        checkout directory (path traversal guard).
         """
-        dest = os.path.join(checkout_dir, fpath)
+        dest = os.path.realpath(os.path.join(checkout_dir, fpath))
+        checkout_real = os.path.realpath(checkout_dir)
+        if not dest.startswith(checkout_real + os.sep) and dest != checkout_real:
+            raise ValueError(
+                f"Path traversal rejected: '{fpath}' resolves to '{dest}' "
+                f"which is outside the checkout root '{checkout_real}'"
+            )
         os.makedirs(os.path.dirname(dest), exist_ok=True)
 
         # Prefer content already in the changeset bundle

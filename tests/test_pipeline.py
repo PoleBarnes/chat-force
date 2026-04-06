@@ -342,6 +342,122 @@ def _valid_mechanic_verdict(**overrides):
 
 
 # =========================================================================
+# Self-modification deny-list tests
+# =========================================================================
+
+
+class TestSelfModificationDenyList:
+    """Test that the changeset extractor rejects modifications to engine paths."""
+
+    def test_detects_pipeline_modification(self):
+        from pipeline.changeset_extractor import ChangesetExtractor
+
+        git_changes = {
+            "new_files": ["skills/new-skill.md"],
+            "modified_files": ["pipeline/config.py"],
+            "deleted_files": [],
+        }
+        denied = ChangesetExtractor._check_self_modification(git_changes)
+        assert "pipeline/config.py" in denied
+
+    def test_detects_github_modification(self):
+        from pipeline.changeset_extractor import ChangesetExtractor
+
+        git_changes = {
+            "new_files": [".github/workflows/ci.yml"],
+            "modified_files": [],
+            "deleted_files": [],
+        }
+        denied = ChangesetExtractor._check_self_modification(git_changes)
+        assert ".github/workflows/ci.yml" in denied
+
+    def test_detects_worker_modification(self):
+        from pipeline.changeset_extractor import ChangesetExtractor
+
+        git_changes = {
+            "new_files": [],
+            "modified_files": [],
+            "deleted_files": ["worker/entrypoint.py"],
+        }
+        denied = ChangesetExtractor._check_self_modification(git_changes)
+        assert "worker/entrypoint.py" in denied
+
+    def test_allows_harness_files(self):
+        from pipeline.changeset_extractor import ChangesetExtractor
+
+        git_changes = {
+            "new_files": ["skills/new-skill.md", "identity/brand.md"],
+            "modified_files": ["eval/criteria.yaml"],
+            "deleted_files": [],
+        }
+        denied = ChangesetExtractor._check_self_modification(git_changes)
+        assert denied == []
+
+    def test_mixed_allowed_and_denied(self):
+        from pipeline.changeset_extractor import ChangesetExtractor
+
+        git_changes = {
+            "new_files": ["skills/good.md", "pipeline/evil.py"],
+            "modified_files": ["mechanic/config/SOUL.md"],
+            "deleted_files": [],
+        }
+        denied = ChangesetExtractor._check_self_modification(git_changes)
+        assert "pipeline/evil.py" in denied
+        assert "mechanic/config/SOUL.md" in denied
+        assert "skills/good.md" not in denied
+
+
+# =========================================================================
+# Path traversal guard tests
+# =========================================================================
+
+
+class TestPathTraversalGuard:
+    """Test that PRCreator._write_file rejects path traversal."""
+
+    def test_rejects_parent_directory_escape(self, tmp_path):
+        from pipeline.pr_creator import PRCreator
+
+        pr = PRCreator(PipelineConfig(output_base=str(tmp_path)), "test-run")
+        checkout = str(tmp_path / "checkout")
+        os.makedirs(checkout)
+
+        with pytest.raises(ValueError, match="Path traversal rejected"):
+            pr._write_file(checkout, "../../../etc/passwd", {"../../../etc/passwd": "evil"}, None)
+
+    def test_rejects_absolute_path_escape(self, tmp_path):
+        from pipeline.pr_creator import PRCreator
+
+        pr = PRCreator(PipelineConfig(output_base=str(tmp_path)), "test-run")
+        checkout = str(tmp_path / "checkout")
+        os.makedirs(checkout)
+
+        with pytest.raises(ValueError, match="Path traversal rejected"):
+            pr._write_file(checkout, "/etc/passwd", {"/etc/passwd": "evil"}, None)
+
+    def test_allows_normal_paths(self, tmp_path):
+        from pipeline.pr_creator import PRCreator
+
+        pr = PRCreator(PipelineConfig(output_base=str(tmp_path)), "test-run")
+        checkout = str(tmp_path / "checkout")
+        os.makedirs(checkout)
+
+        # Should NOT raise
+        pr._write_file(checkout, "skills/new-skill.md", {"skills/new-skill.md": "content"}, None)
+        assert (tmp_path / "checkout" / "skills" / "new-skill.md").read_text() == "content"
+
+    def test_allows_nested_paths(self, tmp_path):
+        from pipeline.pr_creator import PRCreator
+
+        pr = PRCreator(PipelineConfig(output_base=str(tmp_path)), "test-run")
+        checkout = str(tmp_path / "checkout")
+        os.makedirs(checkout)
+
+        pr._write_file(checkout, "a/b/c/deep.txt", {"a/b/c/deep.txt": "deep content"}, None)
+        assert (tmp_path / "checkout" / "a" / "b" / "c" / "deep.txt").read_text() == "deep content"
+
+
+# =========================================================================
 # MechanicManager tests
 # =========================================================================
 
