@@ -118,79 +118,24 @@ class MechanicManager:
         """Run a single Mechanic evaluation turn and parse the JSON verdict."""
         from claude_agent_sdk import query, ClaudeAgentOptions
 
-        try:
-            from claude_agent_sdk import AgentDefinition
-        except ImportError:
-            AgentDefinition = None
-
         async def _collect_result_text() -> dict | str:
             result_text = ""
             assistant_text_parts: list[str] = []
 
-            # Mechanic sub-agents for parallel review checks.
-            agents = None
-            if AgentDefinition is not None:
-                agents = {
-                    "security-reviewer": AgentDefinition(
-                        description=(
-                            "Review a changeset for security issues. "
-                            "Check for: secrets/tokens in code, security control changes, "
-                            "self-modification of engine paths (.github/, pipeline/, worker/, "
-                            "mechanic/, tests/), destructive operations, path traversal. "
-                            "Has: Read, Grep, Glob."
-                        ),
-                        prompt=(
-                            "You are a security reviewer. Analyze the changeset for security "
-                            "issues. Report each finding with severity (critical/high/medium/low), "
-                            "the file:line, and what's wrong. Be specific, not vague."
-                        ),
-                        tools=["Read", "Grep", "Glob"],
-                        model="sonnet",
-                        permissionMode="plan",
-                    ),
-                    "code-reviewer": AgentDefinition(
-                        description=(
-                            "Review a changeset for correctness and minimalism. "
-                            "Check if the code does what the task asked, find bugs, "
-                            "identify unnecessary code or over-engineering. "
-                            "Has: Read, Grep, Glob."
-                        ),
-                        prompt=(
-                            "You are a code reviewer. Evaluate correctness (does it work?), "
-                            "minimalism (is there unnecessary code?), and reproducibility "
-                            "(could someone else verify this?). Report specific findings."
-                        ),
-                        tools=["Read", "Grep", "Glob"],
-                        model="sonnet",
-                        permissionMode="plan",
-                    ),
-                    "orchestration-reviewer": AgentDefinition(
-                        description=(
-                            "Review a session's tool log to evaluate orchestration quality. "
-                            "Check: delegation rate (Agent tool usage), task decomposition, "
-                            "synthesis quality, strategic decision-making. "
-                            "Has: Read, Grep, Glob."
-                        ),
-                        prompt=(
-                            "You are an orchestration quality reviewer. Analyze the tool log "
-                            "to determine: what percentage of work was delegated to sub-agents "
-                            "vs done directly? Were tasks decomposed well? Was the final "
-                            "output a good synthesis of sub-agent results? Report findings."
-                        ),
-                        tools=["Read", "Grep", "Glob"],
-                        model="haiku",
-                        permissionMode="plan",
-                    ),
-                }
-
-            # max_turns=10 (up from 5) to accommodate sub-agent delegation
-            # + structured output completion.
+            # The Mechanic has the Agent tool and can create sub-agents
+            # dynamically to delegate review checks. No predefined agent
+            # roster — the Mechanic decides what checks to run and what
+            # agents to spin up based on the changeset. Over time, the
+            # mechanic-log will reveal which sub-agents are worth
+            # formalizing as AgentDefinitions.
+            #
+            # max_turns=10 to accommodate sub-agent delegation + structured
+            # output completion.
             opts = ClaudeAgentOptions(
                 system_prompt=_build_mechanic_system_prompt(),
                 max_turns=10,
                 permission_mode="plan",
                 output_format={"type": "json_schema", "schema": VERDICT_SCHEMA},
-                **({"agents": agents} if agents else {}),
             )
             async for message in query(prompt=prompt, options=opts):
                 message_type = type(message).__name__
