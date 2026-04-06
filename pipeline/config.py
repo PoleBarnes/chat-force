@@ -34,13 +34,15 @@ class PipelineConfig:
     github_repo: str = "PoleBarnes/chat-force"
     pr_branch_prefix: str = "agent-sdk/auto"
 
-    # Session
+    # Session (legacy test-mode defaults — in production, these come from
+    # config.harness.workspace.limits and these fields are never read)
     session_idle_timeout: int = 600  # 10 minutes
 
     # Secrets (from Doppler -- never hardcode values here)
     github_token_env: str = "GITHUB_TOKEN"
     claude_code_token_env: str = "CLAUDE_CODE_OAUTH_TOKEN"
     slack_token_env: str = "SLACK_BOT_TOKEN"
+    # Legacy test-mode defaults — production reads from harness.workspace.limits
     max_budget_usd: float = 5.0
     max_turns: int = 50
     permission_mode: str = "bypassPermissions"
