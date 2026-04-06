@@ -257,13 +257,19 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
         return user_id is not None and user_id in allowed_user_ids
 
     # Channel role resolution — maps channel IDs to their function.
+    # Priority order matters: if a channel maps to multiple roles (e.g., the
+    # same ID used for testing), intake wins over floor, floor wins over
+    # mechanic_log/assets. Build the dict in REVERSE priority so higher-
+    # priority roles overwrite lower ones.
     channels = config.harness.workspace.channels
-    _channel_roles = {
-        channels.intake: "intake",
-        channels.factory_floor: "factory_floor",
-        channels.mechanic_log: "mechanic_log",
-        channels.brand_assets: "brand_assets",
-    }
+    _channel_roles: dict[str, str] = {}
+    for cid, role in [
+        (channels.brand_assets, "brand_assets"),
+        (channels.mechanic_log, "mechanic_log"),
+        (channels.factory_floor, "factory_floor"),
+        (channels.intake, "intake"),  # highest priority — wins on collision
+    ]:
+        _channel_roles[cid] = role
 
     def _resolve_channel_role(channel_id: str) -> str | None:
         """Return the channel's role, or None for unknown channels."""
