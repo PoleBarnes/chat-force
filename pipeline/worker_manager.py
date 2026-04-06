@@ -50,11 +50,18 @@ class WorkerManager:
         limits = self.config.harness.workspace.limits
         harness_path = self.config.harness.harness_path
 
-        # Mount the harness read-only so the Worker can't modify its own
-        # identity, eval criteria, workspace.yaml, or resource limits.
-        # Only vault/ is writable (for session summaries).
+        # Mount ONLY the directories the Worker needs — nothing else.
+        # The Worker never sees workspace.yaml, mechanic-log/, or eval/.
+        #
+        # Read-only:  identity/ (persona), skills/ (workflows)
+        # Read-write: vault/ (session summaries, knowledge base)
+        #
+        # NOT mounted: workspace.yaml (limits/tokens — injected via env),
+        #              mechanic-log/ (engine-only, written after session),
+        #              eval/ (Mechanic-only, not needed by Worker)
         volumes = {
-            str(harness_path): {"bind": "/harness", "mode": "ro"},
+            str(harness_path / "identity"): {"bind": "/harness/identity", "mode": "ro"},
+            str(harness_path / "skills"): {"bind": "/harness/skills", "mode": "ro"},
             str(harness_path / "vault"): {"bind": "/harness/vault", "mode": "rw"},
         }
 

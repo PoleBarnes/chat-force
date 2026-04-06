@@ -2951,7 +2951,8 @@ class TestWorkerManagerStart:
             assert env["WORKER_CWD"] == "/harness"
             harness_path = config.harness.harness_path
             assert volumes == {
-                str(harness_path): {"bind": "/harness", "mode": "ro"},
+                str(harness_path / "identity"): {"bind": "/harness/identity", "mode": "ro"},
+                str(harness_path / "skills"): {"bind": "/harness/skills", "mode": "ro"},
                 str(harness_path / "vault"): {"bind": "/harness/vault", "mode": "rw"},
             }
             assert labels == {
