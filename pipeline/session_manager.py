@@ -105,6 +105,13 @@ class SessionManager:
         self._idle_checker: threading.Thread | None = None
         self._stop_event = threading.Event()
 
+        # Concurrency cap from harness limits. Defaults to 1 if no harness.
+        max_sessions = 1
+        if config.harness is not None:
+            max_sessions = config.harness.workspace.limits.max_concurrent_sessions
+        self._session_semaphore = threading.Semaphore(max_sessions)
+        self._max_sessions = max_sessions
+
         # Optional callback invoked after a session is closed and the
         # Mechanic phase completes.  Signature: (session, result_dict) -> None
         self.on_session_closed: Callable[[Session, dict | None], None] | None = None
@@ -175,6 +182,15 @@ class SessionManager:
                 pending = None
 
             if pending is None:
+                # Enforce concurrency cap before creating a new session.
+                # The semaphore is released in close_session().
+                if not self._session_semaphore.acquire(blocking=False):
+                    raise RuntimeError(
+                        f"At capacity ({self._max_sessions} concurrent session"
+                        f"{'s' if self._max_sessions != 1 else ''}). "
+                        f"Try again in a minute."
+                    )
+
                 # Reserve the slot atomically (same lock acquisition as the
                 # check above) so a concurrent call for the same user_id
                 # cannot also see "no session" and start a second container.
@@ -245,6 +261,7 @@ class SessionManager:
             session._ready.set()
             with self._lock:
                 self._sessions.pop(user_id, None)
+            self._session_semaphore.release()
             try:
                 if session.worker is not None:
                     session.worker.cleanup()
@@ -261,6 +278,7 @@ class SessionManager:
             # Roll back the reservation so the user can retry.
             with self._lock:
                 self._sessions.pop(user_id, None)
+            self._session_semaphore.release()
             # Best-effort cleanup of partially-started worker.
             try:
                 if session.worker is not None:
@@ -332,6 +350,8 @@ class SessionManager:
             return result
         finally:
             self._cleanup_session(session)
+            # Release the concurrency semaphore so another session can start.
+            self._session_semaphore.release()
             if self.on_session_closed is not None:
                 try:
                     self.on_session_closed(session, result)

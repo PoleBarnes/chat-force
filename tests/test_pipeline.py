@@ -1302,6 +1302,9 @@ class TestSessionManager:
     def test_session_keyed_by_user_id(self, config, mock_deps):
         """Different users should get different sessions."""
         sm = self._make_manager(config)
+        # Allow 2 concurrent sessions for this test.
+        sm._session_semaphore = threading.Semaphore(2)
+        sm._max_sessions = 2
 
         s1, _ = sm.get_or_create_session("USER_A", "C_A", "hello")
         s2, _ = sm.get_or_create_session("USER_B", "C_B", "world")
@@ -1321,6 +1324,47 @@ class TestSessionManager:
 
         sm.close_session("U020")
         assert sm.active_session_count == 0
+
+    def test_concurrency_semaphore_enforces_limit(self, config_with_harness, mock_deps):
+        """get_or_create_session should reject when at max_concurrent_sessions."""
+        sm = self._make_manager(config_with_harness)
+        # Fixture harness has max_concurrent_sessions=1.
+        sm.get_or_create_session("U_FIRST", "C_CH", "task one")
+
+        with pytest.raises(RuntimeError, match="At capacity"):
+            sm.get_or_create_session("U_SECOND", "C_CH", "task two")
+
+    def test_concurrency_semaphore_released_on_close(self, config_with_harness, mock_deps):
+        """After close_session, another session should be allowed."""
+        sm = self._make_manager(config_with_harness)
+        sm.get_or_create_session("U_FIRST", "C_CH", "task one")
+        sm.close_session("U_FIRST")
+
+        # Should succeed — semaphore was released.
+        sm.get_or_create_session("U_SECOND", "C_CH", "task two")
+        assert sm.active_session_count == 1
+
+    def test_concurrency_semaphore_released_on_creation_failure(self, config_with_harness, mock_deps):
+        """If session creation fails, the semaphore must be released."""
+        sm = self._make_manager(config_with_harness)
+        mock_deps["worker"].start.side_effect = RuntimeError("Docker died")
+
+        with pytest.raises(RuntimeError, match="Docker died"):
+            sm.get_or_create_session("U_FAIL", "C_CH", "task")
+
+        # Semaphore should be released — next create should work.
+        mock_deps["worker"].start.side_effect = None
+        mock_deps["worker"].start.return_value = "cid" + "0" * 61
+        sm.get_or_create_session("U_RETRY", "C_CH", "task")
+        assert sm.active_session_count == 1
+
+    def test_concurrency_defaults_to_1_without_harness(self, config, mock_deps):
+        """SessionManager without a harness should allow exactly 1 session."""
+        sm = self._make_manager(config)
+        sm.get_or_create_session("U_ONE", "C_CH", "task")
+
+        with pytest.raises(RuntimeError, match="At capacity"):
+            sm.get_or_create_session("U_TWO", "C_CH", "task")
 
 
 # =========================================================================
