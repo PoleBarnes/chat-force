@@ -24,6 +24,7 @@ from pipeline.config import PipelineConfig
 from pipeline.main import _format_feedback, MAX_ITERATIONS
 from pipeline.mechanic_manager import MechanicManager, MechanicParseError
 from pipeline.pr_creator import PRCreator
+from pipeline.session_store import SessionStore
 from pipeline.worker_manager import WorkerCrashError, WorkerManager
 
 log = logging.getLogger(__name__)
@@ -101,6 +102,7 @@ class SessionManager:
     def __init__(self, config: PipelineConfig):
         self.config = config
         self._sessions: dict[str, Session] = {}  # user_id -> Session
+        self._store = SessionStore(os.path.join(config.output_base, "sessions.db"))
         self._lock = threading.Lock()
         self._idle_checker: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -115,6 +117,14 @@ class SessionManager:
         # Optional callback invoked after a session is closed and the
         # Mechanic phase completes.  Signature: (session, result_dict) -> None
         self.on_session_closed: Callable[[Session, dict | None], None] | None = None
+
+        persisted_active = self._store.get_active_sessions()
+        if persisted_active:
+            log.info(
+                "Loaded %d active session rows from %s; runtime reconciliation not yet implemented",
+                len(persisted_active),
+                self._store.db_path,
+            )
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -247,10 +257,18 @@ class SessionManager:
         worker: WorkerManager | None = None
 
         try:
+            self._store.create_session(
+                run_id=session.run_id,
+                user_id=user_id,
+                channel_id=channel_id,
+                first_message=first_message,
+                created_at=session.created_at.isoformat(),
+            )
             run_id = session.run_id
             sandbox_version = _git_short_hash(run_id)
             worker = WorkerManager(self.config, run_id)
             container_id = worker.start(first_message)
+            self._store.update_container(run_id, container_id, sandbox_version)
 
             # Mark active before the potentially long wait so the idle
             # checker doesn't mistake a slow first turn for an idle session.
@@ -265,6 +283,9 @@ class SessionManager:
                 session.sandbox_version = sandbox_version
                 session.message_count = 1
                 session.last_activity = datetime.now(timezone.utc)
+                message_count = session.message_count
+
+            self._store.update_message_count(run_id, message_count)
 
             # Signal that the session is ready for use.
             session._ready.set()
@@ -332,6 +353,9 @@ class SessionManager:
         with self._lock:
             session.last_activity = datetime.now(timezone.utc)
             session.message_count += 1
+            message_count = session.message_count
+
+        self._store.update_message_count(session.run_id, message_count)
 
         log.debug(
             "[%s] Message %d processed (%d chars response)",
@@ -370,6 +394,28 @@ class SessionManager:
             }
             return result
         finally:
+            closed_at = datetime.now(timezone.utc).isoformat()
+            status = "closed"
+            verdict_json = None
+            pr_url = None
+            error = None
+            if result is not None:
+                status = result.get("status", status)
+                verdict_json = result.get("verdict")
+                pr_url = result.get("pr_url")
+                error = result.get("error")
+
+            try:
+                self._store.close_session(
+                    session.run_id,
+                    status=status,
+                    closed_at=closed_at,
+                    verdict_json=verdict_json,
+                    pr_url=pr_url,
+                    error=error,
+                )
+            except Exception:
+                log.warning("[%s] Could not persist session close", session.run_id, exc_info=True)
             self._cleanup_session(session)
             # Release the concurrency semaphore so another session can start.
             self._session_semaphore.release()

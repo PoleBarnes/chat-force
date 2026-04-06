@@ -1053,6 +1053,16 @@ class TestSessionManager:
         assert session.message_count == 1
         assert session.sandbox_version == "abc1234"
 
+        row = sm._store.get_session(session.run_id)
+        assert row is not None
+        assert row["user_id"] == "U001"
+        assert row["channel_id"] == "C001"
+        assert row["container_id"] == "fake-container-id-full-64-chars" + "0" * 34
+        assert row["sandbox_version"] == "abc1234"
+        assert row["first_message"] == "Build a thing"
+        assert row["message_count"] == 1
+        assert row["status"] == "active"
+
     def test_get_or_create_returns_existing_session(self, config, mock_deps):
         """Second call for the same user should return existing session."""
         sm = self._make_manager(config)
@@ -1120,6 +1130,10 @@ class TestSessionManager:
         sm.send_message(session, "msg 3")
         assert session.message_count == 3
 
+        row = sm._store.get_session(session.run_id)
+        assert row is not None
+        assert row["message_count"] == 3
+
     def test_send_message_acquires_lock(self, config, mock_deps):
         """send_message should serialize through session._msg_lock."""
         sm = self._make_manager(config)
@@ -1184,6 +1198,39 @@ class TestSessionManager:
         assert result is not None
         # evaluate is called in a feedback loop (up to MAX_ITERATIONS)
         mock_deps["mechanic"].evaluate.assert_called()
+
+    def test_close_session_persists_final_result(self, config, mock_deps):
+        sm = self._make_manager(config)
+        session, _ = sm.get_or_create_session("U009A", "C009A", "Init")
+
+        mock_deps["extractor"].extract.return_value = {
+            "git_changes": {
+                "new_files": ["file.py"],
+                "modified_files": [],
+                "deleted_files": [],
+            },
+            "docker_changes": {},
+            "telemetry": {},
+            "agent_logs": {},
+        }
+        mock_deps["mechanic"].evaluate.return_value = {
+            "approved": True,
+            "reason": "Ship it",
+            "summary": "Looks good",
+        }
+        mock_deps["PRCreator"].return_value.create.return_value = (
+            "https://github.com/PoleBarnes/chat-force/pull/123"
+        )
+
+        result = sm.close_session("U009A")
+
+        assert result is not None
+        row = sm._store.get_session(session.run_id)
+        assert row is not None
+        assert row["status"] == "approved"
+        assert row["closed_at"] is not None
+        assert json.loads(row["verdict_json"])["approved"] is True
+        assert row["pr_url"] == "https://github.com/PoleBarnes/chat-force/pull/123"
 
     def test_close_session_skips_mechanic_no_changes(self, config, mock_deps):
         """close_session should skip mechanic when no file changes detected."""

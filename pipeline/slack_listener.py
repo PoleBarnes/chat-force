@@ -30,6 +30,7 @@ from slack_sdk.models.blocks import (
 )
 
 from pipeline.config import PipelineConfig
+from pipeline.disk_cleanup import DiskCleanupThread
 from pipeline.harness_loader import HarnessLoader, HarnessValidationError
 from pipeline.session_manager import Session, SessionManager
 from pipeline.worker_manager import WorkerCrashError
@@ -795,12 +796,14 @@ def main() -> None:
     bot_token = os.environ[config.harness.bot_token_env]
     app_token = os.environ[config.harness.app_token_env]
     app, session_manager = create_app(config)
+    cleanup = DiskCleanupThread(config.output_base)
 
     # -- graceful shutdown ---------------------------------------------------
 
     def shutdown(signum, _frame):
         sig_name = signal.Signals(signum).name
         log.info("Received %s -- shutting down", sig_name)
+        cleanup.stop()
         session_manager.stop()
         sys.exit(0)
 
@@ -810,6 +813,7 @@ def main() -> None:
     # -- start ---------------------------------------------------------------
 
     session_manager.start()
+    cleanup.start()
     log.info("Slack listener starting in socket mode")
 
     handler = SocketModeHandler(app, app_token)
