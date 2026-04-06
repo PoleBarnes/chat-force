@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pipeline.changeset_extractor import ChangesetExtractor
 from pipeline.config import PipelineConfig
 from pipeline.main import _format_feedback, MAX_ITERATIONS
-from pipeline.mechanic_manager import MechanicManager
+from pipeline.mechanic_manager import MechanicManager, MechanicParseError
 from pipeline.pr_creator import PRCreator
 from pipeline.worker_manager import WorkerManager
 
@@ -491,6 +491,11 @@ class SessionManager:
         except TimeoutError as exc:
             log.error("[%s] Timeout during mechanic phase: %s", run_id, exc)
             summary["status"] = "timeout"
+            summary["error"] = str(exc)
+
+        except MechanicParseError as exc:
+            log.error("[%s] Mechanic parse error: %s", run_id, exc)
+            summary["status"] = "mechanic_error"
             summary["error"] = str(exc)
 
         except Exception as exc:

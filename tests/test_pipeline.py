@@ -12,8 +12,10 @@ Docker and external services. Covers:
 
 import json
 import os
+import sys
 import threading
 import time
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
@@ -22,7 +24,7 @@ import pytest
 
 from pipeline.config import PipelineConfig
 from pipeline.changeset_extractor import ChangesetExtractor, _is_noise
-from pipeline.mechanic_manager import MechanicManager
+from pipeline.mechanic_manager import MechanicManager, MechanicParseError
 from pipeline.pr_creator import PRCreator, _slugify
 from pipeline.slack_handler import SlackHandler
 from pipeline.session_manager import Session, SessionManager
@@ -314,66 +316,85 @@ class TestChangesetExtractorParsing:
 
 
 # =========================================================================
+def _valid_mechanic_verdict(**overrides):
+    verdict = {
+        "verdict": "approve",
+        "confidence": 0.91,
+        "summary": "Looks good.",
+        "evaluation": {
+            "meaningful": {"pass": True, "notes": "Addresses the task."},
+            "correct": {"pass": True, "notes": "Logic is sound."},
+            "safe": {"pass": True, "notes": "No safety regressions found."},
+            "minimal": {"pass": True, "notes": "Scope is contained."},
+            "reproducible": {"pass": True, "notes": "Tests and steps are clear."},
+        },
+        "feedback": [],
+        "disposition": "pr",
+        "disposition_reason": "Ready for review.",
+        "pr_title": "Ship the change",
+        "pr_body": "This updates the implementation.",
+        "files_to_include": ["pipeline/mechanic_manager.py"],
+        "files_to_exclude": [],
+        "rejection_reason": "",
+    }
+    verdict.update(overrides)
+    return verdict
+
+
+# =========================================================================
 # MechanicManager tests
 # =========================================================================
 
 
-class TestValidateVerdict:
-    """Test MechanicManager._validate_verdict normalisation."""
+class TestMechanicManager:
+    """Test MechanicManager verdict validation and query parsing."""
 
-    def test_approve_verdict_normalised(self):
-        """verdict=approve should become approved=True."""
-        result = MechanicManager._validate_verdict(
-            {"verdict": "approve", "pr_title": "Update auth"}
-        )
+    def test_validate_verdict_with_pydantic_model(self):
+        result = MechanicManager._validate_verdict(_valid_mechanic_verdict())
+
         assert result["approved"] is True
-        assert result["pr_title"] == "Update auth"
+        assert result["verdict"] == "approve"
+        assert result["confidence"] == pytest.approx(0.91)
+        assert result["evaluation"]["meaningful"]["pass"] is True
+        assert result["evaluation"]["meaningful"]["notes"] == "Addresses the task."
+        assert result["files_to_include"] == ["pipeline/mechanic_manager.py"]
+        assert "reason" not in result
 
-    def test_reject_verdict_normalised(self):
-        """verdict=reject should become approved=False with reason."""
-        result = MechanicManager._validate_verdict(
-            {"verdict": "reject", "rejection_reason": "Code quality too low"}
+    def test_validate_verdict_rejects_invalid_schema(self):
+        assert not issubclass(MechanicParseError, ValueError)
+
+        invalid = _valid_mechanic_verdict()
+        invalid.pop("verdict")
+
+        with pytest.raises(MechanicParseError, match="failed validation"):
+            MechanicManager._validate_verdict(invalid)
+
+    def test_validate_verdict_rejects_invalid_confidence(self):
+        with pytest.raises(MechanicParseError, match="failed validation"):
+            MechanicManager._validate_verdict(_valid_mechanic_verdict(confidence=2.0))
+
+    def test_run_query_raises_mechanic_parse_error_on_bad_json(self, tmp_path):
+        class ClaudeAgentOptions:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class ResultMessage:
+            def __init__(self, result):
+                self.result = result
+                self.structured_output = None
+
+        async def query(prompt, options):
+            yield ResultMessage("not json at all")
+
+        fake_sdk = types.SimpleNamespace(
+            query=query,
+            ClaudeAgentOptions=ClaudeAgentOptions,
         )
-        assert result["approved"] is False
-        assert result["reason"] == "Code quality too low"
+        mm = MechanicManager(PipelineConfig(output_base=str(tmp_path)), "test-run")
 
-    def test_approved_bool_passes_through(self):
-        """Already-normalised approved=True should pass through."""
-        result = MechanicManager._validate_verdict({"approved": True})
-        assert result["approved"] is True
-
-    def test_approved_false_gets_default_reason(self):
-        """approved=False without reason should get a default."""
-        result = MechanicManager._validate_verdict({"approved": False})
-        assert result["approved"] is False
-        assert result["reason"] == "No reason provided"
-
-    def test_approved_false_with_reason_preserved(self):
-        """approved=False with explicit reason should keep it."""
-        result = MechanicManager._validate_verdict(
-            {"approved": False, "reason": "Unsafe changes detected"}
-        )
-        assert result["approved"] is False
-        assert result["reason"] == "Unsafe changes detected"
-
-    def test_missing_both_fields_raises(self):
-        """Verdict missing both 'verdict' and 'approved' should raise ValueError."""
-        with pytest.raises(ValueError, match="missing"):
-            MechanicManager._validate_verdict({"pr_title": "Something"})
-
-    def test_truthy_approved_coerced_to_bool(self):
-        """Truthy non-bool values for approved should be coerced to bool."""
-        result = MechanicManager._validate_verdict({"approved": 1})
-        assert result["approved"] is True
-
-    def test_reject_with_both_reason_keys(self):
-        """If both rejection_reason and reason are present, reason wins."""
-        result = MechanicManager._validate_verdict(
-            {"verdict": "reject", "rejection_reason": "from mechanic", "reason": "explicit"}
-        )
-        assert result["approved"] is False
-        # reason was already present so rejection_reason should not overwrite
-        assert result["reason"] == "explicit"
+        with patch.dict(sys.modules, {"claude_agent_sdk": fake_sdk}):
+            with pytest.raises(MechanicParseError, match="not valid JSON"):
+                mm._run_query("prompt", '{"task": "demo"}')
 
 
 class TestMechanicManagerSDK:
@@ -387,7 +408,7 @@ class TestMechanicManagerSDK:
         """evaluate() should call query() with the changeset and mechanic prompt."""
         mm = MechanicManager(config, "test-run")
 
-        mock_verdict = {"verdict": "approve", "pr_title": "Add feature", "confidence": "high"}
+        mock_verdict = _valid_mechanic_verdict(pr_title="Add feature")
 
         with patch.object(mm, "_run_query", return_value=mock_verdict):
             result = mm.evaluate({"task": "test task", "git_changes": {"diff": "+hello"}})
@@ -399,7 +420,7 @@ class TestMechanicManagerSDK:
         """evaluate() should prepend harness narrative and checks when available."""
         mm = MechanicManager(config_with_harness, "test-run")
 
-        with patch.object(mm, "_run_query", return_value={"verdict": "approve"}) as mock_run:
+        with patch.object(mm, "_run_query", return_value=_valid_mechanic_verdict()) as mock_run:
             mm.evaluate({"task": "test task", "git_changes": {"diff": "+hello"}})
 
         prompt = mock_run.call_args[0][0]
@@ -445,7 +466,7 @@ class TestMechanicManagerSDK:
         config = PipelineConfig(output_base=config_with_harness.output_base, harness=rich_harness)
 
         mm = MechanicManager(config, "test-run")
-        with patch.object(mm, "_run_query", return_value={"verdict": "approve"}) as mock_run:
+        with patch.object(mm, "_run_query", return_value=_valid_mechanic_verdict()) as mock_run:
             mm.evaluate({"task": "test", "git_changes": {"diff": "+hi"}})
 
         prompt = mock_run.call_args[0][0]
@@ -461,7 +482,7 @@ class TestMechanicManagerSDK:
         """evaluate() should keep the legacy prompt when no harness is attached."""
         mm = MechanicManager(config, "test-run")
 
-        with patch.object(mm, "_run_query", return_value={"verdict": "approve"}) as mock_run:
+        with patch.object(mm, "_run_query", return_value=_valid_mechanic_verdict()) as mock_run:
             mm.evaluate({"task": "test task", "git_changes": {"diff": "+hello"}})
 
         prompt = mock_run.call_args[0][0]
@@ -1171,6 +1192,27 @@ class TestSessionManager:
         assert result["status"] == "no_changes"
         mock_deps["mechanic"].evaluate.assert_not_called()
 
+    def test_mechanic_error_status_in_session_summary(self, config, mock_deps):
+        sm = self._make_manager(config)
+        sm.get_or_create_session("U010A", "C010A", "Init")
+
+        mock_deps["extractor"].extract.return_value = {
+            "git_changes": {
+                "new_files": ["file.py"],
+                "modified_files": [],
+                "deleted_files": [],
+            },
+            "docker_changes": {},
+            "telemetry": {},
+            "agent_logs": {},
+        }
+        mock_deps["mechanic"].evaluate.side_effect = MechanicParseError("bad mechanic verdict")
+
+        result = sm.close_session("U010A")
+
+        assert result["status"] == "mechanic_error"
+        assert result["error"] == "bad mechanic verdict"
+
     def test_close_session_removes_session(self, config, mock_deps):
         """close_session should remove the session from the active dict."""
         sm = self._make_manager(config)
@@ -1568,6 +1610,23 @@ class TestSessionClosedCallback:
         call_kwargs = client.chat_postMessage.call_args[1]
         assert "error" in call_kwargs["text"].lower()
         assert "Container died" in call_kwargs["text"]
+
+    def test_session_closed_callback_handles_mechanic_error(self):
+        from pipeline.slack_listener import _make_session_closed_callback
+
+        client = MagicMock()
+        callback = _make_session_closed_callback(client)
+
+        session = self._make_session()
+        result = {"status": "mechanic_error", "error": "bad mechanic verdict"}
+
+        callback(session, result)
+
+        client.chat_postMessage.assert_called_once()
+        call_kwargs = client.chat_postMessage.call_args[1]
+        assert call_kwargs["channel"] == "C_TEST"
+        assert ":gear:" in call_kwargs["text"]
+        assert "valid verdict" in call_kwargs["text"]
 
     def test_no_changes_says_nothing(self):
         from pipeline.slack_listener import _make_session_closed_callback
@@ -2978,6 +3037,14 @@ class TestMechanicPersonaLoading:
 class TestVerdictSchema:
     """Test VERDICT_SCHEMA structure."""
 
+    @staticmethod
+    def _resolve_schema_ref(schema: dict, node: dict) -> dict:
+        ref = node.get("$ref")
+        if not ref:
+            return node
+        ref_name = ref.split("/")[-1]
+        return schema["$defs"][ref_name]
+
     def test_schema_has_required_fields(self):
         """Schema should require all fields the pipeline consumes."""
         from pipeline.mechanic_manager import VERDICT_SCHEMA
@@ -2994,11 +3061,16 @@ class TestVerdictSchema:
         """Schema should have all 5 evaluation criteria."""
         from pipeline.mechanic_manager import VERDICT_SCHEMA
 
-        eval_props = VERDICT_SCHEMA["properties"]["evaluation"]["properties"]
+        evaluation_schema = self._resolve_schema_ref(
+            VERDICT_SCHEMA,
+            VERDICT_SCHEMA["properties"]["evaluation"],
+        )
+        eval_props = evaluation_schema["properties"]
         for criterion in ["meaningful", "correct", "safe", "minimal", "reproducible"]:
+            criterion_schema = self._resolve_schema_ref(VERDICT_SCHEMA, eval_props[criterion])
             assert criterion in eval_props
-            assert "pass" in eval_props[criterion]["properties"]
-            assert "notes" in eval_props[criterion]["properties"]
+            assert "pass" in criterion_schema["properties"]
+            assert "notes" in criterion_schema["properties"]
 
 
 # =========================================================================

@@ -152,6 +152,15 @@ def _make_session_closed_callback(client: WebClient):
                     text=f"\u26a0\ufe0f Session closed with error: {error[:300]}",
                 )
 
+            elif status == "mechanic_error":
+                client.chat_postMessage(
+                    channel=channel,
+                    text=(
+                        ":gear: Session analysis failed — the Mechanic could not produce "
+                        "a valid verdict. This has been logged for investigation."
+                    ),
+                )
+
             # "no_changes" -- say nothing
 
         except Exception:

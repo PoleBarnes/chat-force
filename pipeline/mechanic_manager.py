@@ -4,6 +4,9 @@ import asyncio
 import json
 import logging
 import os
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from pipeline.config import PipelineConfig
 
@@ -44,61 +47,49 @@ def _build_mechanic_system_prompt() -> str:
     return "".join(sections)
 
 
-def _criterion_schema() -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "pass": {"type": "boolean"},
-            "notes": {"type": "string"},
-        },
-        "required": ["pass", "notes"],
-        "additionalProperties": False,
-    }
+class EvaluationCriterion(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pass_: bool = Field(alias="pass")
+    notes: str
 
 
-VERDICT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "verdict": {"type": "string", "enum": ["approve", "reject"]},
-        "confidence": {"type": "number"},
-        "summary": {"type": "string"},
-        "evaluation": {
-            "type": "object",
-            "properties": {
-                "meaningful": _criterion_schema(),
-                "correct": _criterion_schema(),
-                "safe": _criterion_schema(),
-                "minimal": _criterion_schema(),
-                "reproducible": _criterion_schema(),
-            },
-            "required": ["meaningful", "correct", "safe", "minimal", "reproducible"],
-            "additionalProperties": False,
-        },
-        "feedback": {"type": "array", "items": {"type": "string"}},
-        "disposition": {"type": "string", "enum": ["pr", "linear_issue", "discard"]},
-        "disposition_reason": {"type": "string"},
-        "pr_title": {"type": "string"},
-        "pr_body": {"type": "string"},
-        "files_to_include": {"type": "array", "items": {"type": "string"}},
-        "files_to_exclude": {"type": "array", "items": {"type": "string"}},
-        "rejection_reason": {"type": "string"},
-    },
-    "required": [
-        "verdict",
-        "confidence",
-        "summary",
-        "evaluation",
-        "feedback",
-        "disposition",
-        "disposition_reason",
-        "pr_title",
-        "pr_body",
-        "files_to_include",
-        "files_to_exclude",
-        "rejection_reason",
-    ],
-    "additionalProperties": False,
-}
+class Evaluation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    meaningful: EvaluationCriterion
+    correct: EvaluationCriterion
+    safe: EvaluationCriterion
+    minimal: EvaluationCriterion
+    reproducible: EvaluationCriterion
+
+
+class MechanicVerdict(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verdict: Literal["approve", "reject"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    summary: str
+    evaluation: Evaluation
+    feedback: list[str]
+    disposition: Literal["pr", "linear_issue", "discard"]
+    disposition_reason: str
+    pr_title: str
+    pr_body: str
+    files_to_include: list[str]
+    files_to_exclude: list[str]
+    rejection_reason: str
+
+
+VERDICT_SCHEMA = MechanicVerdict.model_json_schema()
+
+
+class MechanicParseError(Exception):
+    """Raised when the Mechanic's verdict cannot be parsed or validated.
+
+    This is a distinct error state — NOT a rejection. It means the Mechanic
+    itself malfunctioned, not that the Worker's code was bad.
+    """
 
 
 class MechanicManager:
@@ -192,13 +183,10 @@ class MechanicManager:
             return result
         try:
             return json.loads(result)
-        except (TypeError, json.JSONDecodeError):
-            log.warning(
-                "Mechanic verdict was not valid JSON for run %s (payload size=%d chars)",
-                self.run_id,
-                len(changeset_json),
-            )
-            return {"approved": False, "reason": "Failed to parse verdict"}
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise MechanicParseError(
+                f"Mechanic verdict was not valid JSON for run {self.run_id}: {exc}"
+            ) from exc
 
     @staticmethod
     def _prepare_evaluation(changeset: dict) -> dict:
@@ -356,23 +344,17 @@ class MechanicManager:
 
     @staticmethod
     def _validate_verdict(verdict: dict) -> dict:
-        """Ensure the verdict has the required fields.
+        """Validate the verdict and normalise it for pipeline consumers."""
+        try:
+            validated = MechanicVerdict.model_validate(verdict)
+        except ValidationError as exc:
+            raise MechanicParseError(
+                f"Mechanic verdict failed validation: {exc.errors()[0]['msg']}"
+            ) from exc
 
-        The Mechanic outputs ``"verdict": "approve"|"reject"`` per its AGENTS.md.
-        We normalise to an ``"approved"`` bool for the pipeline.
-        """
-        # Handle both formats: "verdict": "approve" or "approved": True
-        if "verdict" in verdict and "approved" not in verdict:
-            verdict["approved"] = verdict["verdict"] == "approve"
-        elif "approved" not in verdict:
-            raise ValueError("Verdict missing 'verdict' or 'approved' field")
-        else:
-            verdict["approved"] = bool(verdict["approved"])
+        result = validated.model_dump(by_alias=True)
+        result["approved"] = validated.verdict == "approve"
+        if not result["approved"]:
+            result["reason"] = validated.rejection_reason or "No reason provided"
 
-        if not verdict["approved"]:
-            # Prefer rejection_reason (AGENTS.md schema), fall back to reason
-            if "rejection_reason" in verdict and "reason" not in verdict:
-                verdict["reason"] = verdict["rejection_reason"]
-            verdict.setdefault("reason", "No reason provided")
-
-        return verdict
+        return result
