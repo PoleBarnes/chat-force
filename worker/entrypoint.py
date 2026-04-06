@@ -320,17 +320,16 @@ def _build_client_options(
     except ImportError:
         AgentDefinition = None
 
-    # Orchestrator tools: read-only + delegation. No mutation tools.
-    # The orchestrator MUST delegate execution to sub-agents.
-    orchestrator_tools = ["Agent", "Read", "Grep", "Glob"]
-
+    # The orchestrator needs ALL tools available so sub-agents can inherit
+    # them. The SDK restricts sub-agents to a subset of the parent's tools.
+    # Delegation is enforced via ROLE.md instructions (Approach A), not by
+    # removing tools from the parent (Approach B doesn't work — sub-agents
+    # can't use tools the parent doesn't have).
     options_kwargs = {
         "system_prompt": system_prompt,
         "permission_mode": "bypassPermissions",
         "max_turns": _require_env_int("MAX_TURNS"),
         "max_budget_usd": _require_env_float("MAX_BUDGET_USD"),
-        "tools": orchestrator_tools,
-        "allowed_tools": orchestrator_tools,
         "hooks": hooks,
         "cwd": WORKER_CWD,
     }
