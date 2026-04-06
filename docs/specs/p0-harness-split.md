@@ -1,6 +1,6 @@
 # P0 — Engine / Harness Split
 
-**Status:** Spec, awaiting implementation
+**Status:** Complete (7 commits on pivot/agent-sdk, 228 fast tests green)
 **Owner:** Travis
 **Target branch:** `pivot/agent-sdk`
 **Completes:** ROADMAP P0; REQUIREMENTS.md Part 1 "Engine / Harness Architecture" section

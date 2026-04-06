@@ -51,7 +51,7 @@ class TestPipelineConfig:
     def test_agent_sdk_defaults(self):
         """Config should have Agent SDK-specific defaults."""
         config = PipelineConfig()
-        assert config.claude_code_token_env == "ANTHROPIC_API_KEY"
+        assert config.claude_code_token_env == "CLAUDE_CODE_OAUTH_TOKEN"
         assert config.max_budget_usd == 5.0
         assert config.max_turns == 50
         assert config.permission_mode == "bypassPermissions"
@@ -77,7 +77,7 @@ class TestPipelineConfig:
         """Config should use claude_code_token_env, not anthropic_token_env."""
         config = PipelineConfig()
         assert not hasattr(config, "anthropic_token_env")
-        assert config.claude_code_token_env == "ANTHROPIC_API_KEY"
+        assert config.claude_code_token_env == "CLAUDE_CODE_OAUTH_TOKEN"
 
     def test_post_init_creates_output_dir(self, tmp_path):
         """__post_init__ should create output_base if it does not exist."""
@@ -2401,7 +2401,7 @@ class TestWorkerManagerStart:
             mock_client.containers.run.return_value = container
             mock_client.images.get.return_value = MagicMock()
 
-            with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test-token"}):
+            with patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "sk-test-token"}):
                 wm = WorkerManager(config, "test-run")
                 wm.start("Do something")
 
@@ -2410,7 +2410,7 @@ class TestWorkerManagerStart:
             volumes = call_kwargs[1]["volumes"]
 
             assert env["TASK_INSTRUCTION"] == "Do something"
-            assert env["ANTHROPIC_API_KEY"] == "sk-test-token"
+            assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-test-token"
             assert "ALLOWED_TOOLS" in env
             assert "Bash" in env["ALLOWED_TOOLS"]
             assert env["MAX_TURNS"] == "50"

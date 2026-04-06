@@ -592,6 +592,14 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
 
     @app.event("app_mention")
     def handle_mention(event, say, client):
+        """Handle @bot mentions in channels.
+
+        Unlike the assistant handler (DMs), channel @mentions do NOT use
+        the Slack assistant streaming API (chat_stream). The streaming API
+        requires an assistant thread context that regular channel mentions
+        don't have, and calling it here produces 'Resource ID was not
+        provided' errors. Instead we use plain say() for all responses.
+        """
         user_id = event.get("user")
         channel_id = event.get("channel")
         raw_text = event.get("text", "")
@@ -613,61 +621,17 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
             existing = session_manager.get_session(user_id)
 
             if existing is not None:
-                if _HAS_CHUNKS:
-                    streamer = client.chat_stream(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        recipient_team_id=_get_team_id(client),
-                        recipient_user_id=user_id,
-                        task_display_mode="timeline",
-                    )
-                    streamer.append(chunks=[
-                        TaskUpdateChunk(id="think", title=thinking_status, status="in_progress"),
-                    ])
-                else:
-                    streamer = None
-
                 try:
                     response = session_manager.send_message(existing, text)
                 except TimeoutError:
-                    if streamer is not None:
-                        streamer.append(chunks=[
-                            TaskUpdateChunk(id="think", title="Timed out", status="complete"),
-                        ])
-                        streamer.append(markdown_text=timeout_new_session_text)
-                        streamer.stop()
-                    else:
-                        say(timeout_new_session_text, thread_ts=event_ts)
+                    say(timeout_new_session_text, thread_ts=thread_ts)
                     return
                 except RuntimeError as exc:
                     log.error("send_message failed for user %s: %s", user_id, exc)
-                    if streamer is not None:
-                        streamer.append(chunks=[
-                            TaskUpdateChunk(id="think", title="Error", status="complete"),
-                        ])
-                        streamer.append(markdown_text=f":warning: Could not deliver message: {exc}")
-                        streamer.stop()
-                    else:
-                        say(f":warning: Could not deliver message: {exc}", thread_ts=event_ts)
+                    say(f":warning: Could not deliver message: {exc}", thread_ts=thread_ts)
                     return
 
-                response_body = response or empty_response_text
-
-                if streamer is not None:
-                    streamer.append(chunks=[
-                        TaskUpdateChunk(id="think", title=thinking_status, status="complete"),
-                    ])
-                    streamer.append(markdown_text=response_body)
-                    streamer.stop(blocks=_feedback_blocks())
-                else:
-                    streamer = client.chat_stream(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        recipient_team_id=_get_team_id(client),
-                        recipient_user_id=user_id,
-                    )
-                    streamer.append(markdown_text=response_body)
-                    streamer.stop(blocks=_feedback_blocks())
+                say(response or empty_response_text, thread_ts=thread_ts)
                 return
 
             # New session -- enrich with channel history.
@@ -677,127 +641,40 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
             else:
                 enriched_message = text
 
-            if _HAS_CHUNKS:
-                streamer = client.chat_stream(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    recipient_team_id=_get_team_id(client),
-                    recipient_user_id=user_id,
-                    task_display_mode="plan",
-                )
-                streamer.append(chunks=[
-                    PlanUpdateChunk(id="plan", title="Working on your request"),
-                    TaskUpdateChunk(id="sandbox", title="Setting up sandbox...", status="in_progress"),
-                    TaskUpdateChunk(id="worker", title=working_status, status="pending"),
-                    TaskUpdateChunk(id="response", title="Preparing response", status="pending"),
-                ])
-            else:
-                streamer = None
-
             try:
                 session, is_new = session_manager.get_or_create_session(
                     user_id, channel_id, enriched_message
                 )
             except Exception as exc:
                 log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
-                if streamer is not None:
-                    streamer.append(chunks=[
-                        TaskUpdateChunk(id="sandbox", title="Setting up sandbox... failed", status="complete"),
-                    ])
-                    streamer.append(markdown_text=f":x: Could not start a session: {exc}")
-                    streamer.stop()
-                else:
-                    say(f":x: Could not start a session: {exc}", thread_ts=event_ts)
+                say(f":x: Could not start a session: {exc}", thread_ts=thread_ts)
                 return
 
             if not is_new:
                 # Session was created by another thread -- send as follow-up.
-                if streamer is not None:
-                    streamer.append(chunks=[
-                        TaskUpdateChunk(id="sandbox", title="Using existing session", status="complete"),
-                        TaskUpdateChunk(id="worker", title=thinking_status, status="in_progress"),
-                    ])
-
                 try:
                     response = session_manager.send_message(session, text)
                 except TimeoutError:
-                    if streamer is not None:
-                        streamer.append(chunks=[
-                            TaskUpdateChunk(id="worker", title="Timed out", status="complete"),
-                            TaskUpdateChunk(id="response", title="Preparing response", status="complete"),
-                        ])
-                        streamer.append(markdown_text=timeout_new_session_text)
-                        streamer.stop()
-                    else:
-                        say(timeout_new_session_text, thread_ts=event_ts)
+                    say(timeout_new_session_text, thread_ts=thread_ts)
                     return
                 except RuntimeError as exc:
                     log.error("send_message failed for user %s: %s", user_id, exc)
-                    if streamer is not None:
-                        streamer.append(chunks=[
-                            TaskUpdateChunk(id="worker", title="Error", status="complete"),
-                            TaskUpdateChunk(id="response", title="Preparing response", status="complete"),
-                        ])
-                        streamer.append(markdown_text=f":warning: Could not deliver message: {exc}")
-                        streamer.stop()
-                    else:
-                        say(f":warning: Could not deliver message: {exc}", thread_ts=event_ts)
+                    say(f":warning: Could not deliver message: {exc}", thread_ts=thread_ts)
                     return
 
-                response_body = response or empty_response_text
-
-                if streamer is not None:
-                    streamer.append(chunks=[
-                        TaskUpdateChunk(id="worker", title=finished_status, status="complete"),
-                        TaskUpdateChunk(id="response", title="Response ready", status="complete"),
-                    ])
-                    streamer.append(markdown_text=response_body)
-                    streamer.stop(blocks=_feedback_blocks())
-                else:
-                    streamer = client.chat_stream(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        recipient_team_id=_get_team_id(client),
-                        recipient_user_id=user_id,
-                    )
-                    streamer.append(markdown_text=response_body)
-                    streamer.stop(blocks=_feedback_blocks())
+                say(response or empty_response_text, thread_ts=thread_ts)
                 return
 
             version = session.sandbox_version
-
-            if _HAS_CHUNKS and streamer is not None:
-                streamer.append(chunks=[
-                    TaskUpdateChunk(
-                        id="sandbox",
-                        title=f"Setting up sandbox (main@{version})",
-                        status="complete",
-                    ),
-                    TaskUpdateChunk(
-                        id="worker",
-                        title=working_request_status,
-                        status="in_progress",
-                    ),
-                ])
 
             try:
                 response = session.worker.get_response()
             except Exception as exc:
                 log.error("Could not get first-turn response: %s", exc, exc_info=True)
-                if _HAS_CHUNKS and streamer is not None:
-                    streamer.append(chunks=[
-                        TaskUpdateChunk(id="worker", title=error_status, status="complete"),
-                        TaskUpdateChunk(id="response", title="Preparing response", status="complete"),
-                    ])
-                    streamer.append(
-                        markdown_text=f":warning: Session started (`main@{version}`) but could not read the response: {exc}",
-                    )
-                    streamer.stop()
-                else:
-                    say(
-                        f":warning: Session started (`main@{version}`) but could not read the response: {exc}",
-                        thread_ts=event_ts,
-                    )
+                say(
+                    f":warning: Session started (`main@{version}`) but could not read the response: {exc}",
+                    thread_ts=thread_ts,
+                )
                 return
 
             response_text = (
@@ -805,25 +682,7 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 else empty_response_text
             )
 
-            if _HAS_CHUNKS and streamer is not None:
-                streamer.append(chunks=[
-                    TaskUpdateChunk(id="worker", title=finished_status, status="complete"),
-                    TaskUpdateChunk(id="response", title="Preparing response...", status="in_progress"),
-                ])
-                streamer.append(markdown_text=response_text)
-                streamer.append(chunks=[
-                    TaskUpdateChunk(id="response", title="Response ready", status="complete"),
-                ])
-                streamer.stop(blocks=_feedback_blocks())
-            else:
-                streamer = client.chat_stream(
-                    channel=channel_id,
-                    thread_ts=thread_ts,
-                    recipient_team_id=_get_team_id(client),
-                    recipient_user_id=user_id,
-                )
-                streamer.append(markdown_text=response_text)
-                streamer.stop(blocks=_feedback_blocks())
+            say(response_text, thread_ts=thread_ts)
 
         except Exception:
             log.error("Unhandled error in mention handler", exc_info=True)

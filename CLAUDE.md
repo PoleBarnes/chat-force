@@ -115,7 +115,7 @@ These are defined in `worker/entrypoint.py` and consumed in `pipeline/worker_man
 
 ### Auth
 
-- `ANTHROPIC_API_KEY` is the canonical env var for Claude access (both Worker-inside-container and host-side Mechanic). Per-bot scoping comes later.
+- `CLAUDE_CODE_OAUTH_TOKEN` is the canonical env var for Claude Code SDK access (both Worker-inside-container and host-side Mechanic). The SDK wraps the Claude Code CLI, which requires OAuth — not a raw API key. `ANTHROPIC_API_KEY` is still used by the raw Anthropic Python SDK if called directly, but the engine's primary path goes through the Agent SDK. Per-bot scoping comes later.
 - `GITHUB_TOKEN` is used by `PRCreator` for git clone/push and `gh` CLI. Injected via git credential helper, not embedded in URLs.
 - Per-bot Slack tokens follow the pattern `<SLUG>_SLACK_BOT_TOKEN` and `<SLUG>_SLACK_APP_TOKEN` (e.g., `BLACK_TIE_SLACK_BOT_TOKEN`). Declared in the harness's `workspace.yaml`, resolved from Doppler at engine startup.
 
