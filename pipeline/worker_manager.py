@@ -55,11 +55,16 @@ class WorkerManager:
         self._ensure_network()
         self._ensure_image()
 
+        # Route API traffic through the host-side credential proxy.
+        # The proxy injects the real API key — the container never holds it.
+        from pipeline.credential_proxy import PROXY_PLACEHOLDER_KEY
+
+        proxy_base_url = f"http://host.docker.internal:{self.config.credential_proxy_port}"
+
         env = {
             "TASK_INSTRUCTION": task,
-            self.config.claude_code_token_env: os.environ.get(
-                self.config.claude_code_token_env, ""
-            ),
+            "ANTHROPIC_BASE_URL": proxy_base_url,
+            "ANTHROPIC_API_KEY": PROXY_PLACEHOLDER_KEY,
             "ALLOWED_TOOLS": ",".join(self.config.allowed_tools),
             "MAX_TURNS": str(limits.max_turns_per_session),
             "MAX_BUDGET_USD": str(limits.max_budget_usd_per_session),

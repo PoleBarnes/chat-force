@@ -2952,9 +2952,8 @@ class TestWorkerManagerStart:
             mock_client.containers.run.return_value = container
             mock_client.images.get.return_value = MagicMock()
 
-            with patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "sk-test-token"}):
-                wm = WorkerManager(config, "test-run")
-                wm.start("Do something")
+            wm = WorkerManager(config, "test-run")
+            wm.start("Do something")
 
             call_kwargs = mock_client.containers.run.call_args
             env = call_kwargs[1]["environment"]
@@ -2962,7 +2961,13 @@ class TestWorkerManagerStart:
             labels = call_kwargs[1]["labels"]
 
             assert env["TASK_INSTRUCTION"] == "Do something"
-            assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-test-token"
+            # Real credential is NOT in the container — only the proxy placeholder.
+            from pipeline.credential_proxy import PROXY_PLACEHOLDER_KEY
+            assert env["ANTHROPIC_API_KEY"] == PROXY_PLACEHOLDER_KEY
+            assert "ANTHROPIC_BASE_URL" in env
+            assert "host.docker.internal" in env["ANTHROPIC_BASE_URL"]
+            # The real CLAUDE_CODE_OAUTH_TOKEN must NOT be in the env.
+            assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
             assert "ALLOWED_TOOLS" in env
             assert "Bash" in env["ALLOWED_TOOLS"]
             assert env["MAX_TURNS"] == "50"

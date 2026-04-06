@@ -874,11 +874,26 @@ def main() -> None:
     app, session_manager = create_app(config)
     cleanup = DiskCleanupThread(config.output_base)
 
+    # -- credential proxy (secrets stay on host, never in containers) --------
+
+    from pipeline.credential_proxy import CredentialProxy
+
+    credential = os.environ.get(config.claude_code_token_env, "")
+    if not credential:
+        log.critical("Missing %s — cannot start credential proxy", config.claude_code_token_env)
+        sys.exit(1)
+
+    proxy = CredentialProxy(
+        port=config.credential_proxy_port,
+        credential=credential,
+    )
+
     # -- graceful shutdown ---------------------------------------------------
 
     def shutdown(signum, _frame):
         sig_name = signal.Signals(signum).name
         log.info("Received %s -- shutting down", sig_name)
+        proxy.stop()
         cleanup.stop()
         session_manager.stop()
         sys.exit(0)
@@ -888,9 +903,10 @@ def main() -> None:
 
     # -- start ---------------------------------------------------------------
 
+    proxy.start()
     session_manager.start()
     cleanup.start()
-    log.info("Slack listener starting in socket mode")
+    log.info("Slack listener starting in socket mode (credential proxy on port %d)", config.credential_proxy_port)
 
     handler = SocketModeHandler(app, app_token)
     handler.start()  # blocks

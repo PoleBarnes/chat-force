@@ -180,9 +180,8 @@ class TestContainerHardeningConfig:
             mock_client.containers.run.return_value = container
             mock_client.images.get.return_value = MagicMock()
 
-            with patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "test"}):
-                wm = WorkerManager(config_with_harness, "test-run")
-                wm.start("task")
+            wm = WorkerManager(config_with_harness, "test-run")
+            wm.start("task")
 
             kwargs = mock_client.containers.run.call_args[1]
             assert kwargs["cap_drop"] == ["ALL"]

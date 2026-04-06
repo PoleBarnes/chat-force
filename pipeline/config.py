@@ -38,6 +38,9 @@ class PipelineConfig:
     # config.harness.workspace.limits and these fields are never read)
     session_idle_timeout: int = 600  # 10 minutes
 
+    # Credential proxy — secrets stay on the host, never in containers
+    credential_proxy_port: int = 8082
+
     # Secrets (from Doppler -- never hardcode values here)
     github_token_env: str = "GITHUB_TOKEN"
     claude_code_token_env: str = "CLAUDE_CODE_OAUTH_TOKEN"
