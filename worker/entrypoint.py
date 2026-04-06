@@ -238,6 +238,62 @@ async def _run_turn(client, message_text: str, usage_tracker: dict) -> str:
     return response_text
 
 
+def _build_sub_agents(AgentDefinition):
+    """Define the sub-agents that the orchestrator can delegate to.
+
+    The orchestrator (main agent) gets only read + delegation tools.
+    All execution happens through these sub-agents, each with a focused
+    tool set and a cheaper model (Sonnet instead of Opus).
+    """
+    return {
+        "researcher": AgentDefinition(
+            description=(
+                "Research a topic using web search and URL fetching. "
+                "Use this agent when you need to find information online, "
+                "analyze competitor websites, gather market intelligence, "
+                "or fetch content from specific URLs."
+            ),
+            prompt=(
+                "You are a research specialist. Search the web, fetch URLs, "
+                "and return concise, factual findings. Include sources. "
+                "Do not fabricate information — if you can't find it, say so."
+            ),
+            tools=["WebSearch", "WebFetch", "Read", "Grep"],
+            model="sonnet",
+            permissionMode="bypassPermissions",
+        ),
+        "builder": AgentDefinition(
+            description=(
+                "Write code, create files, install packages, and run scripts. "
+                "Use this agent for any task that requires creating or modifying "
+                "files, running shell commands, or installing dependencies."
+            ),
+            prompt=(
+                "You are a builder. Write code, create files, install packages, "
+                "run scripts. Produce working output fast. Don't explain — just build. "
+                "Report what you created and any errors you encountered."
+            ),
+            tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
+            model="sonnet",
+            permissionMode="bypassPermissions",
+        ),
+        "reviewer": AgentDefinition(
+            description=(
+                "Review work for quality, accuracy, and brand alignment. "
+                "Use this agent to check deliverables before presenting to the user."
+            ),
+            prompt=(
+                "You are a quality reviewer. Read the work and check it against "
+                "the customer's brand, voice, and requirements. Report specific "
+                "issues, not vague suggestions. Be brief."
+            ),
+            tools=["Read", "Grep", "Glob"],
+            model="haiku",
+            permissionMode="bypassPermissions",
+        ),
+    }
+
+
 def _build_client_options(
     system_prompt: str,
     usage_tracker: dict,
@@ -254,19 +310,30 @@ def _build_client_options(
         "Stop": [HookMatcher(matcher=None, hooks=[stop_hook])],
     }
 
+    # Import AgentDefinition for sub-agent definitions.
+    try:
+        from claude_agent_sdk import AgentDefinition
+    except ImportError:
+        AgentDefinition = None
+
+    # Orchestrator tools: read-only + delegation. No mutation tools.
+    # The orchestrator MUST delegate execution to sub-agents.
+    orchestrator_tools = ["Agent", "Read", "Grep", "Glob"]
+
     options_kwargs = {
         "system_prompt": system_prompt,
         "permission_mode": "bypassPermissions",
         "max_turns": _require_env_int("MAX_TURNS"),
         "max_budget_usd": _require_env_float("MAX_BUDGET_USD"),
-        "allowed_tools": (
-            os.environ.get("ALLOWED_TOOLS", "").split(",")
-            if os.environ.get("ALLOWED_TOOLS")
-            else None
-        ),
+        "tools": orchestrator_tools,
+        "allowed_tools": orchestrator_tools,
         "hooks": hooks,
         "cwd": WORKER_CWD,
     }
+
+    # Wire sub-agents if the SDK supports AgentDefinition.
+    if AgentDefinition is not None:
+        options_kwargs["agents"] = _build_sub_agents(AgentDefinition)
 
     if ClaudeAgentOptions is not None:
         return ClaudeAgentOptions(**options_kwargs)

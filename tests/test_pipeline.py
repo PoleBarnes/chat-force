@@ -2937,8 +2937,8 @@ class TestWorkerManagerStart:
             assert "host.docker.internal" in env["ANTHROPIC_BASE_URL"]
             # The real CLAUDE_CODE_OAUTH_TOKEN must NOT be in the env.
             assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
-            assert "ALLOWED_TOOLS" in env
-            assert "Bash" in env["ALLOWED_TOOLS"]
+            # ALLOWED_TOOLS no longer in env — tool config is in the entrypoint.
+            assert "ALLOWED_TOOLS" not in env
             assert env["MAX_TURNS"] == "50"
             assert env["MAX_BUDGET_USD"] == "5.0"
             assert env["IDLE_TIMEOUT"] == "600"
@@ -3390,11 +3390,13 @@ class TestEntrypointHelpers:
             def __init__(self, **kw):
                 for k, v in kw.items(): setattr(self, k, v)
 
-        with patch.dict(os.environ, {"MAX_TURNS": "10", "MAX_BUDGET_USD": "2.5", "ALLOWED_TOOLS": "Bash,Read"}):
+        with patch.dict(os.environ, {"MAX_TURNS": "10", "MAX_BUDGET_USD": "2.5"}):
             opts = _build_client_options("prompt", {}, FakeOptions, FakeHookMatcher)
         assert opts.max_turns == 10
         assert opts.max_budget_usd == 2.5
-        assert opts.allowed_tools == ["Bash", "Read"]
+        # Orchestrator tools: read-only + delegation only
+        assert opts.tools == ["Agent", "Read", "Grep", "Glob"]
+        assert opts.allowed_tools == ["Agent", "Read", "Grep", "Glob"]
 
 
 # =========================================================================

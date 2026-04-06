@@ -78,11 +78,13 @@ class WorkerManager:
             "TASK_INSTRUCTION": task,
             "ANTHROPIC_BASE_URL": proxy_base_url,
             "ANTHROPIC_API_KEY": PROXY_PLACEHOLDER_KEY,
-            "ALLOWED_TOOLS": ",".join(self.config.allowed_tools),
             "MAX_TURNS": str(limits.max_turns_per_session),
             "MAX_BUDGET_USD": str(limits.max_budget_usd_per_session),
             "IDLE_TIMEOUT": str(limits.session_idle_timeout_seconds),
             "WORKER_CWD": "/harness",
+            # Tool configuration is now handled inside the entrypoint
+            # (orchestrator tools + sub-agent definitions). No need for
+            # ALLOWED_TOOLS env var.
         }
 
         labels = {
