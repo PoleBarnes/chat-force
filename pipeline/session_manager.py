@@ -24,7 +24,7 @@ from pipeline.config import PipelineConfig
 from pipeline.main import _format_feedback, MAX_ITERATIONS
 from pipeline.mechanic_manager import MechanicManager, MechanicParseError
 from pipeline.pr_creator import PRCreator
-from pipeline.worker_manager import WorkerManager
+from pipeline.worker_manager import WorkerCrashError, WorkerManager
 
 log = logging.getLogger(__name__)
 
@@ -207,6 +207,8 @@ class SessionManager:
 
         # Container startup happens outside the lock so we don't block other
         # users.  If it fails we remove the reservation.
+        worker: WorkerManager | None = None
+
         try:
             run_id = session.run_id
             sandbox_version = _git_short_hash(run_id)
@@ -239,6 +241,19 @@ class SessionManager:
             )
             return session, True
 
+        except WorkerCrashError:
+            session._ready.set()
+            with self._lock:
+                self._sessions.pop(user_id, None)
+            try:
+                if session.worker is not None:
+                    session.worker.cleanup()
+                elif worker is not None:
+                    worker.cleanup()
+            except Exception:
+                pass
+            raise
+
         except Exception:
             # Wake any threads waiting on this placeholder BEFORE removing
             # it, so they don't block for the full timeout duration.
@@ -250,6 +265,8 @@ class SessionManager:
             try:
                 if session.worker is not None:
                     session.worker.cleanup()
+                elif worker is not None:
+                    worker.cleanup()
             except Exception:
                 pass
             raise
@@ -497,6 +514,15 @@ class SessionManager:
             log.error("[%s] Mechanic parse error: %s", run_id, exc)
             summary["status"] = "mechanic_error"
             summary["error"] = str(exc)
+
+        except WorkerCrashError as exc:
+            log.error(
+                "[%s] Worker crashed during mechanic feedback: %s",
+                run_id,
+                str(exc)[:500],
+            )
+            summary["status"] = "worker_crashed"
+            summary["error"] = str(exc)[:500]
 
         except Exception as exc:
             log.error("[%s] Mechanic phase error: %s", run_id, exc, exc_info=True)

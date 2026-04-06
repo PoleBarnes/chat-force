@@ -15,6 +15,10 @@ from pipeline.config import PipelineConfig
 log = logging.getLogger(__name__)
 
 
+class WorkerCrashError(Exception):
+    """Raised when the Worker container crashed and wrote an error trace."""
+
+
 class WorkerManager:
     """Starts, monitors, and cleans up the Worker container."""
 
@@ -97,7 +101,8 @@ class WorkerManager:
                 log.info("Worker completion sentinel detected")
                 error = self.get_error()
                 if error:
-                    log.warning("Worker reported error: %s", error[:500])
+                    log.error("Worker crashed: %s", error[:500])
+                    raise WorkerCrashError(error)
                 return
 
             self._container.reload()
@@ -111,6 +116,13 @@ class WorkerManager:
                 break
 
             time.sleep(2)
+
+        # Kill the container before raising so it stops burning API credits.
+        log.warning("Worker timed out after %ds, killing container", timeout_seconds)
+        try:
+            self._container.kill()
+        except Exception:
+            log.debug("Could not kill timed-out container", exc_info=True)
 
         raise TimeoutError(
             f"Worker did not complete within {timeout_seconds}s "

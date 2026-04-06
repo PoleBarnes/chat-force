@@ -32,6 +32,7 @@ from slack_sdk.models.blocks import (
 from pipeline.config import PipelineConfig
 from pipeline.harness_loader import HarnessLoader, HarnessValidationError
 from pipeline.session_manager import Session, SessionManager
+from pipeline.worker_manager import WorkerCrashError
 
 # Thinking-step chunk types -- available in slack_sdk >= 3.41.
 # Fall back gracefully if running an older SDK.
@@ -159,6 +160,14 @@ def _make_session_closed_callback(client: WebClient):
                         ":gear: Session analysis failed — the Mechanic could not produce "
                         "a valid verdict. This has been logged for investigation."
                     ),
+                )
+
+            elif status == "worker_crashed":
+                error = result.get("error", "")
+                scrubbed = error.split("\n")[0][:200] if error else "Unknown crash"
+                client.chat_postMessage(
+                    channel=channel,
+                    text=f":boom: Worker crashed: {scrubbed}",
                 )
 
             # "no_changes" -- say nothing
@@ -380,6 +389,25 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 session, is_new = session_manager.get_or_create_session(
                     user_id, channel_id, enriched_message
                 )
+            except WorkerCrashError as exc:
+                scrubbed = str(exc).split("\n")[0][:200]
+                log.error("Worker crashed during startup for user %s: %s", user_id, scrubbed)
+                if streamer is not None:
+                    streamer.append(chunks=[
+                        TaskUpdateChunk(
+                            id="sandbox",
+                            title="Setting up sandbox... failed",
+                            status="complete",
+                        ),
+                    ])
+                    streamer.append(
+                        markdown_text=f":boom: Worker crashed during startup: {scrubbed}",
+                    )
+                    streamer.stop()
+                else:
+                    say(f":boom: Worker crashed during startup: {scrubbed}")
+                    set_status(status="")
+                return
             except Exception as exc:
                 log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
                 if streamer is not None:
@@ -654,6 +682,11 @@ def create_app(config: PipelineConfig) -> tuple[App, SessionManager]:
                 session, is_new = session_manager.get_or_create_session(
                     user_id, channel_id, enriched_message
                 )
+            except WorkerCrashError as exc:
+                scrubbed = str(exc).split("\n")[0][:200]
+                log.error("Worker crashed during startup for user %s: %s", user_id, scrubbed)
+                say(f":boom: Worker crashed during startup: {scrubbed}", thread_ts=thread_ts)
+                return
             except Exception as exc:
                 log.error("Failed to create session for user %s: %s", user_id, exc, exc_info=True)
                 say(f":x: Could not start a session: {exc}", thread_ts=thread_ts)

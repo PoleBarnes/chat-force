@@ -28,7 +28,7 @@ from pipeline.mechanic_manager import MechanicManager, MechanicParseError
 from pipeline.pr_creator import PRCreator, _slugify
 from pipeline.slack_handler import SlackHandler
 from pipeline.session_manager import Session, SessionManager
-from pipeline.worker_manager import WorkerManager
+from pipeline.worker_manager import WorkerCrashError, WorkerManager
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1213,6 +1213,35 @@ class TestSessionManager:
         assert result["status"] == "mechanic_error"
         assert result["error"] == "bad mechanic verdict"
 
+    def test_worker_crash_sets_session_status(self, config, mock_deps):
+        sm = self._make_manager(config)
+        sm.get_or_create_session("U010B", "C010B", "Init")
+
+        mock_deps["extractor"].extract.return_value = {
+            "git_changes": {
+                "new_files": ["file.py"],
+                "modified_files": [],
+                "deleted_files": [],
+            },
+            "docker_changes": {},
+            "telemetry": {},
+            "agent_logs": {},
+        }
+        mock_deps["mechanic"].evaluate.return_value = {
+            "approved": False,
+            "reason": "Needs one more pass",
+            "feedback": ["Fix the failure"],
+        }
+        mock_deps["worker"].wait_for_completion.side_effect = [
+            None,
+            WorkerCrashError("crash trace\nTraceback (most recent call last): ..."),
+        ]
+
+        result = sm.close_session("U010B")
+
+        assert result["status"] == "worker_crashed"
+        assert "crash trace" in result["error"]
+
     def test_close_session_removes_session(self, config, mock_deps):
         """close_session should remove the session from the active dict."""
         sm = self._make_manager(config)
@@ -1627,6 +1656,27 @@ class TestSessionClosedCallback:
         assert call_kwargs["channel"] == "C_TEST"
         assert ":gear:" in call_kwargs["text"]
         assert "valid verdict" in call_kwargs["text"]
+
+    def test_session_closed_callback_handles_worker_crash(self):
+        from pipeline.slack_listener import _make_session_closed_callback
+
+        client = MagicMock()
+        callback = _make_session_closed_callback(client)
+
+        session = self._make_session()
+        result = {
+            "status": "worker_crashed",
+            "error": "RuntimeError: oops\nTraceback (most recent call last): ...",
+        }
+
+        callback(session, result)
+
+        client.chat_postMessage.assert_called_once()
+        call_kwargs = client.chat_postMessage.call_args[1]
+        assert call_kwargs["channel"] == "C_TEST"
+        assert ":boom:" in call_kwargs["text"]
+        assert "RuntimeError: oops" in call_kwargs["text"]
+        assert "Traceback" not in call_kwargs["text"]
 
     def test_no_changes_says_nothing(self):
         from pipeline.slack_listener import _make_session_closed_callback
@@ -2260,6 +2310,118 @@ class TestThreadReplyRouting:
         h["session_manager"].send_message.assert_not_called()
 
 
+class TestSlackWorkerCrashHandling:
+    @pytest.fixture
+    def app_harness(self, config_with_harness):
+        from pipeline.slack_listener import create_app
+
+        session_manager = MagicMock()
+        client = MagicMock()
+        handlers = {}
+        assistant_handlers = {}
+
+        class FakeAssistant:
+            def thread_started(self, fn):
+                assistant_handlers["thread_started"] = fn
+                return fn
+
+            def user_message(self, fn):
+                assistant_handlers["user_message"] = fn
+                return fn
+
+        mock_app_instance = MagicMock()
+
+        def capture_event(event_type):
+            def decorator(fn):
+                handlers[event_type] = fn
+                return fn
+
+            return decorator
+
+        mock_app_instance.event = capture_event
+        mock_app_instance.use = MagicMock()
+        mock_app_instance.action = lambda action_id: lambda fn: fn
+        mock_app_instance.client = client
+
+        with (
+            patch("pipeline.slack_listener.SessionManager", return_value=session_manager),
+            patch("pipeline.slack_listener.App", return_value=mock_app_instance),
+            patch("pipeline.slack_listener.Assistant", return_value=FakeAssistant()),
+            patch("pipeline.slack_listener._HAS_CHUNKS", False),
+            patch.dict(
+                os.environ,
+                {config_with_harness.harness.bot_token_env: "xoxb-fake-token"},
+            ),
+        ):
+            create_app(config_with_harness)
+
+        return {
+            "assistant_handlers": assistant_handlers,
+            "handlers": handlers,
+            "session_manager": session_manager,
+            "client": client,
+        }
+
+    def test_worker_crash_during_session_creation_surfaces_to_user(self, app_harness):
+        h = app_harness
+        h["session_manager"].get_session.return_value = None
+        h["session_manager"].get_or_create_session.side_effect = WorkerCrashError(
+            "RuntimeError: oops\nTraceback (most recent call last): ..."
+        )
+
+        say = MagicMock()
+        set_status = MagicMock()
+        context = MagicMock()
+        context.user_id = "U_TEST"
+        context.team_id = "T_TEST"
+        payload = {"channel": "C_TEST", "text": "Build it", "thread_ts": "1234.5678"}
+
+        # Disable chunk streaming so the handler uses say() instead of
+        # chat_stream — the assistant handler uses streaming by default.
+        with patch("pipeline.slack_listener._HAS_CHUNKS", False):
+            handler = h["assistant_handlers"]["user_message"]
+            handler(
+                payload=payload,
+                client=h["client"],
+                context=context,
+                say=say,
+                set_status=set_status,
+                set_title=MagicMock(),
+                logger=MagicMock(),
+            )
+
+        say.assert_called()
+        message = say.call_args[0][0]
+        assert ":boom: Worker crashed during startup:" in message
+        assert "RuntimeError: oops" in message
+        assert "Traceback" not in message
+
+    def test_mention_worker_crash_during_session_creation_surfaces_to_user(self, app_harness):
+        h = app_harness
+        h["session_manager"].get_session.return_value = None
+        h["session_manager"].get_or_create_session.side_effect = WorkerCrashError(
+            "RuntimeError: oops\nTraceback (most recent call last): ..."
+        )
+
+        say = MagicMock()
+        event = {
+            "user": "U_TEST",
+            "channel": "C_TEST",
+            "text": "<@U_BOT> Build it",
+            "event_ts": "1111.2222",
+        }
+
+        handler = h["handlers"]["app_mention"]
+        handler(event=event, say=say, client=h["client"])
+
+        say.assert_called_once()
+        call_args = say.call_args
+        assert ":boom: Worker crashed during startup:" in call_args[0][0]
+        assert "RuntimeError: oops" in call_args[0][0]
+        assert "Traceback" not in call_args[0][0]
+        assert call_args[1]["thread_ts"] == "1111.2222"
+
+
 # =========================================================================
 # Worker Entrypoint tests (Agent SDK pivot — Step 2)
 # =========================================================================
@@ -2539,6 +2701,48 @@ class TestWaitForCompletionEdgeCases:
                     mock_time.side_effect = [0.0, 0.0, 1.0, 601.0]
                     with pytest.raises(TimeoutError, match="within 600s"):
                         wm.wait_for_completion()
+
+    def test_wait_for_completion_raises_worker_crash_error(self, config, mock_docker):
+        wm = WorkerManager(config, "test-run")
+        wm._container = mock_docker["container"]
+
+        with patch("pipeline.worker_manager.subprocess") as mock_sub:
+            mock_sub.run.return_value = MagicMock(returncode=0)
+            with patch.object(
+                wm,
+                "get_error",
+                return_value="Worker crash: RuntimeError: something broke\n\nTraceback...",
+            ):
+                with pytest.raises(WorkerCrashError, match="something broke"):
+                    wm.wait_for_completion()
+
+    def test_timeout_kills_container_before_raising(self, config_with_harness, mock_docker):
+        # Build a config with a very short worker timeout (2s) by constructing
+        # a new LoadedHarness — LimitsConfig is frozen, so we can't mutate.
+        from pipeline.harness_loader import LoadedHarness, LimitsConfig
+        h = config_with_harness.harness
+        short_limits = h.workspace.limits.model_copy(update={"worker_timeout_seconds": 2})
+        short_workspace = h.workspace.model_copy(update={"limits": short_limits})
+        short_harness = LoadedHarness(
+            harness_path=h.harness_path,
+            workspace=short_workspace,
+            identity=h.identity,
+            eval_criteria=h.eval_criteria,
+        )
+        config_with_harness.harness = short_harness
+
+        wm = WorkerManager(config_with_harness, "test-run")
+        wm._container = mock_docker["container"]
+
+        with patch("pipeline.worker_manager.subprocess") as mock_sub:
+            mock_sub.run.return_value = MagicMock(returncode=1)
+            with patch("pipeline.worker_manager.time.sleep"):
+                with patch("pipeline.worker_manager.time.monotonic") as mock_time:
+                    mock_time.side_effect = [0.0, 0.0, 3.0]
+                    with pytest.raises(TimeoutError, match="within 2s"):
+                        wm.wait_for_completion()
+
+        mock_docker["container"].kill.assert_called_once()
 
     def test_container_exits_before_sentinel(self, config, mock_docker):
         """wait_for_completion should raise when container exits without sentinel."""
