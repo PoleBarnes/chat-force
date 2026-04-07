@@ -686,42 +686,24 @@ def cmd_help():
     print(f"""chat-force v{VERSION} — self-improving prototyping tool
 
 Usage:
-  chat-force run                          Launch swarm → PM → mechanic
-  chat-force mechanic [args]            Manual mechanic review of current project
-  chat-force create-ticket --template T Create ticket (--field or --interactive)
+  chat-force                            Launch session (init if needed, then build → review → improve)
+  chat-force init [name] [--tracker linear|jira]
+                                        Scaffold a new project
+  chat-force status                     Show current branch, tracker, attempts
+  chat-force create-ticket --template T Create ticket from template
   chat-force list-templates             List available ticket templates
-  chat-force status                     Show current ticket, branch, attempts
-  chat-force init [name] [--template T] [--tracker linear|jira]
-                                        Scaffold a new project (creates dir if name given)
-  chat-force help                       This help
-
-Project structure:
-  CLAUDE.md                    Identity and instructions
-  vault/                       Knowledge base
-  .claude/rules/               Rules (brand, eval, never-list)
-  .claude/skills/              Skills (grown by mechanic)
-  .claude/agents/              Sub-agents (grown by mechanic)
-  .claude/ticket-templates/    Ticket templates (JSON)
-  .mechanic/log/               Proposal history""")
+  chat-force mechanic                   Manual mechanic review
+  chat-force help                       This help""")
 
 
 def main():
     args = sys.argv[1:]
-    if not args:
-        cmd_help()
-        return
-
-    cmd = args[0]
-    rest = args[1:]
-
     commands = {
-        "prototype": cmd_prototype,
-        "mechanic": cmd_mechanic,
         "init": cmd_init,
-        "run": cmd_run,
+        "status": cmd_status,
         "create-ticket": cmd_create_ticket,
         "list-templates": cmd_list_templates,
-        "status": cmd_status,
+        "mechanic": cmd_mechanic,
         "help": lambda _: cmd_help(),
         "--help": lambda _: cmd_help(),
         "-h": lambda _: cmd_help(),
@@ -730,13 +712,18 @@ def main():
         "-v": lambda _: print(f"chat-force v{VERSION}"),
     }
 
-    handler = commands.get(cmd)
-    if handler:
-        handler(rest)
-    else:
-        error(f"Unknown command: {cmd}")
-        cmd_help()
-        sys.exit(1)
+    # No args or unrecognized first arg → default behavior
+    if not args or args[0] not in commands:
+        # Not initialized? Run init first.
+        if not Path("CLAUDE.md").exists():
+            cmd_init(args)
+        # Then launch the three-phase session
+        cmd_run(args)
+        return
+
+    cmd = args[0]
+    rest = args[1:]
+    commands[cmd](rest)
 
 
 if __name__ == "__main__":
