@@ -22,7 +22,8 @@ jobs:
             --with docker,pytest,pydantic,"pyyaml","ruamel.yaml","slack_sdk>=3.41.0","slack_bolt>=1.27.0" \
             pytest tests/test_ticket_templates.py tests/test_branch_management.py \
                    tests/test_phase2_run.py tests/test_phase3_templates.py \
-                   tests/test_status_command.py tests/test_tracker_selection.py -v
+                   tests/test_status_command.py tests/test_tracker_selection.py \
+                   tests/test_coverage_gaps.py -v
 
   test-engine:
     name: Engine Tests
