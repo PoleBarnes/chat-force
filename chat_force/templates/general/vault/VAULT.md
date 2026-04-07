@@ -43,8 +43,20 @@ vault/
 1. Start with `index.md` to find relevant pages.
 2. Read candidate pages in full. Follow cross-references.
 3. Synthesize with citations: `(see [[summaries/sources/slug]])`.
-4. If the answer is novel and worth preserving, file it as a new page.
+4. **File valuable answers back into the wiki.** Comparisons, analyses, connections you discovered — these are worth keeping. Create a new page in the appropriate directory (concepts, entities, or decisions). Don't let good synthesis disappear into chat history.
 5. Append to `log.md`.
+
+### Lint (periodic health check)
+
+Run periodically to keep the wiki healthy as it grows:
+
+1. **Contradictions** — scan for pages that make conflicting claims. Flag with `status: contradiction` frontmatter.
+2. **Stale claims** — look for pages citing old sources when newer sources supersede them.
+3. **Orphan pages** — find pages with no inbound links from other wiki pages.
+4. **Missing pages** — find concepts or entities mentioned in wikilinks that don't have their own page yet.
+5. **Missing cross-references** — find pages that discuss the same topic but don't link to each other.
+6. **Data gaps** — identify questions the wiki can't answer that could be filled with a new source.
+7. Update affected pages and append to `log.md`.
 
 ## File Conventions
 
