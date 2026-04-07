@@ -99,7 +99,7 @@ Generate proposals. Each proposal is one of these types:
 
 When you identify a tooling gap — the agent needed a capability it didn't have — **research before recommending.** The AI tooling space moves fast. A tool that was best-in-class 6 months ago may be obsolete today.
 
-**Research process (mandatory before any mcp_server proposal):**
+**Research and trial process (mandatory before any mcp_server proposal):**
 
 1. **Search the web** for the current best options. Use queries like:
    - "best MCP server for [capability] 2025 2026"
@@ -107,28 +107,46 @@ When you identify a tooling gap — the agent needed a capability it didn't have
    - "claude code [capability] tool"
    - Check GitHub stars, last commit date, npm/PyPI download counts
 
-2. **Evaluate candidates** on these criteria:
+2. **Shortlist 2-3 candidates.** Evaluate on:
    - **Actively maintained?** Last commit within 3 months. No abandoned repos.
    - **Well-adopted?** GitHub stars, download counts, community mentions.
    - **MCP-native?** Prefer tools built as MCP servers over generic CLI tools that need wrapping.
    - **API key required?** Free/open-source preferred. If paid, note the cost.
-   - **Works with Claude Code?** Verify it's compatible (stdio transport, not just HTTP).
+   - **Works with Claude Code?** Must support stdio transport.
 
-3. **Compare at least 2-3 options** before recommending one. Present the comparison to the user:
-   - Tool A: [pros/cons, stars, last updated]
-   - Tool B: [pros/cons, stars, last updated]
-   - Recommendation: Tool A because [specific reason]
+3. **Trial each candidate.** This is the critical step — don't just read docs, actually try them:
+   - Install the tool (`npx -y <package>`, `uvx <package>`, `pip install <package>`)
+   - Run it against the **actual task that failed** in the session. For example, if scraping failed, try scraping the same URL that the swarm couldn't handle.
+   - Record: did it work? How fast? What was the output quality? Any errors?
+   - Uninstall candidates that didn't make the cut.
 
-4. **Verify the install command works** if possible — run `npx -y <package> --help` or `uvx <package> --help` to confirm the package exists and installs.
+4. **Compare with real evidence.** Present results to the user:
+   ```
+   Tool A (firecrawl-mcp):
+     - Install: npx -y firecrawl-mcp
+     - Trial: scraped rawmit.com → got full product catalog, 2.3s
+     - Stars: 15K, last commit: 2 days ago
+     - Cost: free tier (500 pages/mo), paid for more
+
+   Tool B (playwright-mcp):
+     - Install: npx -y @anthropic-ai/browser-mcp-server
+     - Trial: scraped rawmit.com → got full page with JS rendering, 8.1s
+     - Stars: 3K, last commit: 1 week ago
+     - Cost: free (open source)
+
+   Recommendation: Tool A — 3x faster, cleaner output, purpose-built for scraping.
+   ```
+
+5. **Present the winner already installed.** By the time you propose, the winning tool should already be installed and proven to work. The user is approving a tested solution, not a guess.
 
 **For each `mcp_server` proposal, provide:**
-1. The research summary (what you searched, what you found, why this tool won)
-2. The server name, package, and install command (npx/uvx)
-3. What capability it adds
-4. What session failure it would have prevented
+1. The research summary (what you searched, what you found)
+2. Trial results for each candidate (what you tested, what happened)
+3. The winning tool: name, package, install command
+4. Proof it works: the actual output from your trial against the failed task
 5. The exact JSON to merge into `.mcp.json`
 6. Any API keys or credentials the user will need to provide
-7. Alternatives considered and why they were rejected
+7. Alternatives tried and why they lost
 
 #### Template Evolution
 
