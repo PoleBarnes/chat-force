@@ -17,6 +17,7 @@ include = ["chat_force*"]
 
 [tool.setuptools.package-data]
 chat_force = [
+    "statusline.sh",
     "templates/**/*",
     "templates/**/.*",
     "templates/general/.claude/**/*",

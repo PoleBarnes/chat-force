@@ -664,8 +664,11 @@ def _run_mechanic_reflection(ticket_id, branch):
         f"missing capability, research and trial MCP servers as documented in your prompt"
     )
 
+    env = os.environ.copy()
+    env["CHAT_FORCE_PHASE"] = "improve"
     rc = run_cmd(
-        ["claude", "--session-id", session_id] + mechanic_args + ["-p", mechanic_instruction]
+        ["claude", "--session-id", session_id] + mechanic_args + ["-p", mechanic_instruction],
+        env=env,
     ).returncode
     print()
     if rc not in (0, 130):
