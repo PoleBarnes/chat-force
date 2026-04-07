@@ -35,9 +35,35 @@ require_project() {
 
 require_tracker() {
     if [[ ! -f ".claude/chat-force.yaml" ]]; then
-        error "No tracker configured."
-        error "Run: chat-force init --tracker linear  (or --tracker jira)"
-        exit 1
+        info "No tracker configured. Which platform do you use?"
+        echo "  1) Linear"
+        echo "  2) Jira"
+        local choice
+        read -r -p "$(echo -e "${BLUE}[chat-force]${NC} Select [1/2]: ")" choice
+
+        local tracker
+        case "$choice" in
+            1|linear)  tracker="linear" ;;
+            2|jira)    tracker="jira" ;;
+            *) error "Invalid choice. Use 1 (Linear) or 2 (Jira)."; exit 1 ;;
+        esac
+
+        mkdir -p .claude
+        cat > ".claude/chat-force.yaml" <<CFEOF
+tracker: $tracker
+CFEOF
+        ok "Tracker set to $tracker"
+
+        # Write MCP config if missing
+        if [[ ! -f ".mcp.json" ]]; then
+            local tpl="$TEMPLATES_DIR/general"
+            if [[ "$tracker" == "jira" ]] && [[ -f "$tpl/.mcp.jira.json" ]]; then
+                cp "$tpl/.mcp.jira.json" ./.mcp.json
+            elif [[ -f "$tpl/.mcp.json" ]]; then
+                cp "$tpl/.mcp.json" ./.mcp.json
+            fi
+            [[ -f ".mcp.json" ]] && ok "Created .mcp.json ($tracker MCP config)"
+        fi
     fi
 }
 
