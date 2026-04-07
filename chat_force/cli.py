@@ -11,7 +11,11 @@ import sys
 import uuid
 from pathlib import Path
 
-VERSION = "0.2.1"
+try:
+    from importlib.metadata import version as _pkg_version
+    VERSION = _pkg_version("chat-force")
+except Exception:
+    VERSION = "dev"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 MECHANIC_PROMPT = TEMPLATES_DIR / "mechanic-prompt.md"
 PM_PROMPT = TEMPLATES_DIR / "pm-prompt.md"
