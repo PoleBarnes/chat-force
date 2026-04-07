@@ -77,6 +77,15 @@ Generate proposals. Each proposal is one of these types:
 | `prompt_update` | `CLAUDE.md` | Strengthened instructions or identity |
 | `eval` | `.claude/rules/eval-criteria.md` | New or updated evaluation criterion |
 | `vault` | `vault/...` | Knowledge base update |
+| `ticket_template` | `.claude/ticket-templates/<name>.yaml` | A new or improved ticket template |
+
+#### Template Evolution
+
+After analyzing the session, also consider:
+- **Are there patterns across recent tickets that suggest a new template?** If similar work keeps being done with the `general` template, propose a specialized template that captures the recurring structure.
+- **Should an existing template be improved?** If acceptance criteria were insufficient, required artifacts were missing, or the template's skills list was incomplete, propose an update.
+- **New templates** must follow the schema: `name`, `description`, `required_inputs` (each with `name`, `type`, `description`), `required_artifacts`, `acceptance_criteria`, `skills`.
+- **Template proposals** follow the same interactive approval flow as all other proposals.
 
 ### Step 5 — Present Proposals Interactively
 

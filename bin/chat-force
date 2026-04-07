@@ -167,12 +167,14 @@ cmd_create_ticket() {
     require_project
 
     local template=""
+    local interactive=false
     local -a fields=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --template) template="$2"; shift 2 ;;
             --field) fields+=("$2"); shift 2 ;;
+            --interactive) interactive=true; shift ;;
             *) error "Unknown arg: $1"; exit 1 ;;
         esac
     done
@@ -191,7 +193,21 @@ cmd_create_ticket() {
         exit 1
     fi
 
-    # Parse template and validate fields using Python (PyYAML)
+    # Interactive mode: launch Claude CLI to interview for fields
+    if [[ "$interactive" == "true" ]]; then
+        require_claude
+        local session_id
+        session_id=$(uuidgen 2>/dev/null || python3 -c "import uuid; print(uuid.uuid4())")
+
+        info "Launching interactive ticket creation (template: $template)"
+        local interview_prompt
+        interview_prompt="You are helping create a ticket from the '${template}' template. Read the template at ${tpl_file} to see what fields are required. Interview the user for each required field one at a time. When all fields are gathered, output the complete ticket as YAML to stdout and save it to .ticket-context."
+
+        claude --session-id "$session_id" -p "$interview_prompt"
+        return $?
+    fi
+
+    # Non-interactive: validate fields are provided
     python3 -c "
 import sys, yaml
 
@@ -216,6 +232,7 @@ required_names = [inp['name'] for inp in tpl.get('required_inputs', [])]
 missing = [n for n in required_names if n not in provided]
 if missing:
     print(f'Missing required fields: {', '.join(missing)}', file=sys.stderr)
+    print(f'Hint: use --interactive to gather fields via interview', file=sys.stderr)
     sys.exit(1)
 
 # Build ticket output
@@ -227,7 +244,7 @@ ticket = {
     'skills': tpl.get('skills', []),
 }
 print(yaml.dump(ticket, default_flow_style=False, sort_keys=False))
-" "$tpl_file" "$template" "${fields[@]}"
+" "$tpl_file" "$template" ${fields[@]+"${fields[@]}"}
 }
 
 # ---------------------------------------------------------------------------
@@ -457,7 +474,7 @@ Usage:
   chat-force prototype [args]           Prototype session → mechanic handoff
   chat-force mechanic [args]            Mechanic review of current project
   chat-force run <ticket-id> [--branch] Execute ticket (swarm → PM → mechanic)
-  chat-force create-ticket --template T Create a ticket from a template
+  chat-force create-ticket --template T Create ticket (--field or --interactive)
   chat-force list-templates             List available ticket templates
   chat-force init [--template T]        Scaffold a new project
   chat-force help                       This help
