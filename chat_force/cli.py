@@ -458,11 +458,30 @@ def cmd_run(args):
     print(f"  {NC}(Don't use Ctrl+C — that aborts the entire sequence.)")
     print()
 
-    # Launch claude interactively with full UI
+    # Status line script path from installed package
+    statusline_script = Path(__file__).parent / "statusline.sh"
+
+    # Session-scoped settings: custom status line
+    session_settings = json.dumps({
+        "statusLine": {
+            "type": "command",
+            "command": str(statusline_script),
+        }
+    })
+
+    # Phase env var for status line
+    env = os.environ.copy()
+    env["CHAT_FORCE_PHASE"] = "build"
+
+    # Launch claude interactively: Opus model, high effort, custom status line
     rc = run_cmd(
         ["claude", "--session-id", session_id,
-         "--system-prompt", str(prompt_file)]
-        + extra_args
+         "--model", "opus",
+         "--effort", "high",
+         "--system-prompt", str(prompt_file),
+         "--settings", session_settings]
+        + extra_args,
+        env=env,
     ).returncode
 
     if prompt_file.exists():
@@ -606,8 +625,11 @@ def _run_pm_verification(ticket_id, branch):
         f"Present your pass/fail verdict per criterion."
     )
 
+    env = os.environ.copy()
+    env["CHAT_FORCE_PHASE"] = "review"
     rc = run_cmd(
-        ["claude", "--session-id", session_id] + pm_args + ["-p", pm_instruction]
+        ["claude", "--session-id", session_id] + pm_args + ["-p", pm_instruction],
+        env=env,
     ).returncode
     print()
     if rc not in (0, 130):
