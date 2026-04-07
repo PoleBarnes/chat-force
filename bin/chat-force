@@ -33,6 +33,14 @@ require_project() {
     [[ -f "CLAUDE.md" ]] || { error "Not a chat-force project. Run 'chat-force init' first."; exit 1; }
 }
 
+require_tracker() {
+    if [[ ! -f ".claude/chat-force.yaml" ]]; then
+        error "No tracker configured."
+        error "Run: chat-force init --tracker linear  (or --tracker jira)"
+        exit 1
+    fi
+}
+
 # ---------------------------------------------------------------------------
 cmd_prototype() {
     require_claude
@@ -189,6 +197,7 @@ CFEOF
 # ---------------------------------------------------------------------------
 cmd_create_ticket() {
     require_project
+    require_tracker
 
     local template=""
     local interactive=false
@@ -298,6 +307,7 @@ print(d.get('description', '(no description)'))
 cmd_run() {
     require_claude
     require_project
+    require_tracker
 
     local ticket_id=""
     local branch_override=""
@@ -492,6 +502,7 @@ _run_mechanic_reflection() {
 # ---------------------------------------------------------------------------
 cmd_status() {
     require_project
+    require_tracker
 
     local branch
     branch=$(git branch --show-current 2>/dev/null || echo "(detached)")
