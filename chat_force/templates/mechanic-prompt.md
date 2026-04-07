@@ -137,7 +137,9 @@ When you identify a tooling gap — the agent needed a capability it didn't have
    Recommendation: Tool A — 3x faster, cleaner output, purpose-built for scraping.
    ```
 
-5. **Present the winner already installed.** By the time you propose, the winning tool should already be installed and proven to work. The user is approving a tested solution, not a guess.
+5. **Clean up losers.** Uninstall the candidates that didn't win. Remove any test artifacts they produced. Only the winning tool should remain installed when you present the proposal.
+
+6. **Present the winner already installed.** By the time you propose, the winning tool should already be installed and proven to work. The user is approving a tested solution, not a guess. If the user rejects the proposal, uninstall the winner too — leave no traces.
 
 **For each `mcp_server` proposal, provide:**
 1. The research summary (what you searched, what you found)
