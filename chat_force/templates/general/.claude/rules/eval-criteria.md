@@ -9,6 +9,8 @@ The Mechanic uses these criteria to evaluate prototyping sessions.
 - Code runs without errors (if code was produced)
 - Follows existing project conventions (language, style, structure)
 - Respects the never-list completely
+- If external content was ingested, vault is updated (vault/summaries/, vault/index.md, vault/log.md)
+- All produced artifacts are listed in .ticket-context required_artifacts
 
 ## Quality signals (nice to have)
 

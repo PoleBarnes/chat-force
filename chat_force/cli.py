@@ -305,6 +305,16 @@ def cmd_init(args):
                 shutil.copy2(tmpl, dst)
                 ok(f"  Created .claude/ticket-templates/{tmpl.name}")
 
+    # Skills
+    skills_dir = tpl / ".claude" / "skills"
+    if skills_dir.exists():
+        Path(".claude/skills").mkdir(parents=True, exist_ok=True)
+        for skill in skills_dir.glob("*.md"):
+            dst = Path(".claude/skills") / skill.name
+            if not dst.exists():
+                shutil.copy2(skill, dst)
+                ok(f"  Created .claude/skills/{skill.name}")
+
     # Vault
     if not Path("vault").exists():
         for d in ("raw", "summaries/sources", "summaries/sessions",
@@ -462,8 +472,11 @@ def cmd_run(args):
         info(f"Creating new branch: {branch}")
         run_cmd(["git", "checkout", "-b", branch])
 
-    # Write ticket context
+    # Write and commit ticket context before swarm starts
     _write_ticket_context(ticket_id, branch)
+    run_cmd(["git", "add", ".ticket-context"])
+    run_cmd(["git", "commit", "-m", f"ticket-context: {ticket_id} attempt setup"],
+            capture_output=True)
 
     # Phase 1: Swarm
     _run_swarm(ticket_id, branch, extra_args)

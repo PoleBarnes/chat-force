@@ -15,8 +15,10 @@
   ],
   "required_artifacts": [],
   "acceptance_criteria": [
-    "Deliverable exists and is functional",
-    "No regressions introduced"
+    "Deliverable directly addresses the stated goal",
+    "No hallucinated facts, URLs, or statistics",
+    "No regressions introduced",
+    "If external content was ingested, vault is updated (summaries, index, log)"
   ],
   "skills": []
 }

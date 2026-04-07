@@ -62,6 +62,17 @@ See `vault/` for the project knowledge base. Read `vault/VAULT.md` for the schem
 
 ---
 
+## Before You Finish (Session-Close Checklist)
+
+Before your final commit, verify all of these:
+
+1. **Vault updated?** If you ingested external content (URLs, documents, research), write a summary to `vault/summaries/sources/`, update `vault/index.md`, and append to `vault/log.md`. See `vault/VAULT.md` for the schema.
+2. **Artifacts listed?** Update `.ticket-context` so `required_artifacts` lists the actual files you produced.
+3. **Acceptance criteria met?** Re-read the acceptance criteria in `.ticket-context` and verify each one against your output.
+4. **No secrets committed?** Check your diff for API keys, tokens, or credentials.
+
+---
+
 ## What Happens After Your Session
 
 The **Mechanic** analyzes your session and proposes harness improvements:
