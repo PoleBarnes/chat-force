@@ -68,8 +68,8 @@ class TestInitTracker:
             assert os.path.isfile(mcp_path)
             mcp = json.load(open(mcp_path))
             servers = mcp.get("mcpServers", {})
-            assert "jira" in servers or "atlassian" in servers, (
-                "Jira MCP server should be configured"
+            assert "atlassian" in servers, (
+                "Atlassian MCP server should be configured"
             )
             assert "linear" not in servers, "Linear should NOT be in Jira config"
         finally:

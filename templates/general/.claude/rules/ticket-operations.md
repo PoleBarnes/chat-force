@@ -169,31 +169,40 @@ PASS | FAIL — specific details about what passed or failed
 ### Rules for Comments
 ---
 
-## Linear MCP Setup
+## MCP Setup
 
-The project includes a `.mcp.json` file that configures the Linear MCP server. To activate it:
+The project includes a `.mcp.json` file that configures the tracker MCP server. Check `.claude/chat-force.yaml` for which tracker is configured (`linear` or `jira`).
 
-1. Replace `REPLACE_ME_LINEAR_API_KEY` in `.mcp.json` with your Linear API key
-2. Get your API key from Linear: Settings → API → Personal API keys
-3. Claude Code CLI will automatically detect the `.mcp.json` and connect to Linear
+### Linear MCP (`@linear/mcp-server`)
 
-### Available Linear MCP Tools
+Setup: Replace `REPLACE_ME_LINEAR_API_KEY` in `.mcp.json` with your Linear API key (Settings → API → Personal API keys).
 
-Once configured, you have access to these tools for ticket operations:
-
-| Tool | Maps to Operation |
-|------|------------------|
+| MCP Tool | Maps to Operation |
+|----------|------------------|
 | `get_issue` | `fetch_ticket(id)` |
 | `save_issue` | `create_ticket(fields)` / `change_state()` |
 | `save_comment` | `add_comment(id, body)` |
 | `create_attachment` | `add_attachment(id, file)` |
 | `list_issues` | Search/filter tickets |
 | `list_issue_labels` | Read available labels |
-| `list_issue_statuses` | Read platform states (for reference only — use labels) |
+
+### Jira/Atlassian MCP (`mcp-atlassian` via `uvx`)
+
+Setup: Replace `REPLACE_ME_JIRA_*` values in `.mcp.json` with your Jira instance URL, email, and API token (https://id.atlassian.com/manage-profile/security/api-tokens).
+
+| MCP Tool | Maps to Operation |
+|----------|------------------|
+| `jira_get_issue` | `fetch_ticket(id)` |
+| `jira_create_issue` | `create_ticket(fields)` |
+| `jira_update_issue` | `change_state()` / update fields |
+| `jira_add_comment` | `add_comment(id, body)` |
+| `jira_search` | Search via JQL |
+| `jira_transition_issue` | Platform-native transitions (for reference — use labels) |
+| `jira_list_projects` | List available projects |
 
 ### Important Notes
 
-- Always use `cf:*` labels for state tracking, not Linear's native workflow states
+- Always use `cf:*` labels for state tracking, not native workflow states
 - When creating tickets, add the `cf:created` label
 - When fetching tickets, parse the description to extract the `## Acceptance Criteria` section
 - Comments should follow the Comment Format defined above

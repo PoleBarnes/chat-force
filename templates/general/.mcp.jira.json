@@ -1,11 +1,12 @@
 {
   "mcpServers": {
-    "jira": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/jira-mcp-server"],
+    "atlassian": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["mcp-atlassian"],
       "env": {
-        "JIRA_INSTANCE_URL": "REPLACE_ME_JIRA_INSTANCE_URL",
-        "JIRA_USER_EMAIL": "REPLACE_ME_JIRA_USER_EMAIL",
+        "JIRA_URL": "REPLACE_ME_JIRA_URL",
+        "JIRA_EMAIL": "REPLACE_ME_JIRA_EMAIL",
         "JIRA_API_TOKEN": "REPLACE_ME_JIRA_API_TOKEN"
       }
     }
