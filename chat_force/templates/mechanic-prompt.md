@@ -54,6 +54,13 @@ Evaluate the session on two axes:
 - Did it synthesize sub-agent results into coherent output?
 - Did it make strategic decisions about what to research vs. what to build?
 
+**Vault hygiene:**
+- If external content was ingested, was the vault updated? (summaries, entities, concepts, index, log)
+- Are there contradictions between new content and existing vault pages?
+- Are there orphan pages (no inbound links) or missing pages (broken wikilinks)?
+- Are there stale pages that newer sources supersede?
+- Run a vault lint pass if the session touched external content.
+
 ### Step 3 — Delegate Review Checks
 
 Create sub-agents for focused analysis as needed. Examples:
