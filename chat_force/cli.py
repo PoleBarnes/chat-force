@@ -555,9 +555,19 @@ def _run_swarm(ticket_id, branch, extra_args):
         f"saved and committed."
     )
 
+    # Write swarm prompt to a file so claude can read it as initial context
+    prompt_file = Path(".chat-force-swarm-prompt.md")
+    prompt_file.write_text(swarm_prompt)
+
+    # Run interactively — user sees output and can guide the session
     rc = run_cmd(
-        ["claude", "--session-id", session_id, "-p", swarm_prompt] + extra_args
+        ["claude", "--session-id", session_id, "--system-prompt", str(prompt_file)]
+        + extra_args
     ).returncode
+
+    # Clean up prompt file
+    if prompt_file.exists():
+        prompt_file.unlink()
     print()
     if rc not in (0, 130):
         warn(f"Swarm exited with code {rc}")
