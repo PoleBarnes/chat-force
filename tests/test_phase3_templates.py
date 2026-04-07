@@ -36,7 +36,7 @@ def run_chat_force(*args, cwd=None, env=None):
 def project_dir():
     tmpdir = tempfile.mkdtemp(prefix="chatforce-phase3-test-")
     try:
-        result = run_chat_force("init", cwd=tmpdir)
+        result = run_chat_force("init", "--tracker", "linear", cwd=tmpdir)
         assert result.returncode == 0, f"init failed: {result.stderr}"
         yield tmpdir
     finally:

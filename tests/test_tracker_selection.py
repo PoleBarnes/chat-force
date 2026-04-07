@@ -23,11 +23,17 @@ def run_chat_force(*args, cwd=None, env=None):
     )
 
 
-def init_project(tmpdir, tracker=None):
+def init_project(tmpdir, tracker=None, stdin=None):
     args = ["init"]
     if tracker:
         args += ["--tracker", tracker]
-    result = run_chat_force(*args, cwd=tmpdir)
+    base_env = os.environ.copy()
+    base_env["PYTHONPATH"] = REPO_ROOT
+    result = subprocess.run(
+        ["python3", "-m", "chat_force.cli", *args],
+        capture_output=True, text=True, cwd=tmpdir, env=base_env,
+        input=stdin,
+    )
     assert result.returncode == 0, f"init failed: {result.stderr}"
     return result
 
@@ -55,10 +61,11 @@ class TestInitTracker:
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
-    def test_init_default_is_linear(self):
+    def test_init_prompts_when_no_tracker_flag(self):
+        """init without --tracker should prompt; selecting 1 gives Linear."""
         tmpdir = tempfile.mkdtemp(prefix="chatforce-tracker-")
         try:
-            init_project(tmpdir)
+            init_project(tmpdir, stdin="1\n")
             mcp = json.loads(open(os.path.join(tmpdir, ".mcp.json")).read())
             assert "linear" in mcp.get("mcpServers", {})
         finally:

@@ -57,7 +57,7 @@ def git_project_dir():
                        cwd=tmpdir, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.name", "Test"],
                        cwd=tmpdir, capture_output=True, check=True)
-        result = run_chat_force("init", cwd=tmpdir)
+        result = run_chat_force("init", "--tracker", "linear", cwd=tmpdir)
         assert result.returncode == 0, f"init failed: {result.stderr}"
         subprocess.run(["git", "add", "-A"], cwd=tmpdir, capture_output=True, check=True)
         subprocess.run(["git", "commit", "-m", "initial"],
@@ -71,7 +71,7 @@ def git_project_dir():
 def project_dir():
     tmpdir = tempfile.mkdtemp(prefix="chatforce-gaps-test-")
     try:
-        result = run_chat_force("init", cwd=tmpdir)
+        result = run_chat_force("init", "--tracker", "linear", cwd=tmpdir)
         assert result.returncode == 0
         yield tmpdir
     finally:
@@ -177,7 +177,7 @@ class TestInitIdempotency:
             f.write("# My Custom Project")
 
         # Run init again
-        run_chat_force("init", cwd=project_dir)
+        run_chat_force("init", "--tracker", "linear", cwd=project_dir)
 
         # CLAUDE.md should still have our custom content
         content = open(claude_path).read()
@@ -191,7 +191,7 @@ class TestInitWithProjectName:
     def test_init_creates_directory(self):
         tmpdir = tempfile.mkdtemp(prefix="chatforce-gaps-")
         try:
-            result = run_chat_force("init", "my-new-project", cwd=tmpdir)
+            result = run_chat_force("init", "my-new-project", "--tracker", "linear", cwd=tmpdir)
             assert result.returncode == 0
             project_dir = os.path.join(tmpdir, "my-new-project")
             assert os.path.isdir(project_dir)
@@ -210,7 +210,7 @@ class TestInitWithProjectName:
             with open(os.path.join(existing, "README.md"), "w") as f:
                 f.write("# Existing project")
 
-            result = run_chat_force("init", "existing-project", cwd=tmpdir)
+            result = run_chat_force("init", "existing-project", "--tracker", "linear", cwd=tmpdir)
             assert result.returncode == 0
             # Should have CLAUDE.md alongside existing README
             assert os.path.isfile(os.path.join(existing, "CLAUDE.md"))
@@ -226,7 +226,7 @@ class TestInitWithProjectName:
             existing = os.path.join(tmpdir, "no-git-dir")
             os.makedirs(existing)
 
-            result = run_chat_force("init", "no-git-dir", cwd=tmpdir)
+            result = run_chat_force("init", "no-git-dir", "--tracker", "linear", cwd=tmpdir)
             assert result.returncode == 0
             # Should have initialized git
             assert os.path.isdir(os.path.join(existing, ".git"))
@@ -237,7 +237,7 @@ class TestInitWithProjectName:
     def test_init_no_name_works_in_cwd(self):
         tmpdir = tempfile.mkdtemp(prefix="chatforce-gaps-")
         try:
-            result = run_chat_force("init", cwd=tmpdir)
+            result = run_chat_force("init", "--tracker", "linear", cwd=tmpdir)
             assert result.returncode == 0
             assert os.path.isfile(os.path.join(tmpdir, "CLAUDE.md"))
         finally:

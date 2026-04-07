@@ -65,21 +65,7 @@ def require_tracker():
         return
 
     info("No tracker configured. Which platform do you use?")
-    print("  1) Linear")
-    print("  2) Jira")
-    try:
-        choice = input(f"{BLUE}[chat-force]{NC} Select [1/2]: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        sys.exit(1)
-
-    if choice in ("1", "linear"):
-        tracker = "linear"
-    elif choice in ("2", "jira"):
-        tracker = "jira"
-    else:
-        error("Invalid choice. Use 1 (Linear) or 2 (Jira).")
-        sys.exit(1)
+    tracker = _prompt_choice("Select", [("Linear", "linear"), ("Jira", "jira")])
 
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(json.dumps({"tracker": tracker}, indent=2) + "\n")
@@ -161,9 +147,36 @@ def cmd_mechanic(args):
     run_cmd(["claude"] + claude_args + remaining)
 
 
+def _prompt_choice(prompt_msg, options):
+    """Prompt user to pick from numbered options. Returns the chosen value."""
+    for i, (label, _) in enumerate(options, 1):
+        print(f"  {i}) {label}")
+    try:
+        choice = input(f"{BLUE}[chat-force]{NC} {prompt_msg}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(1)
+    # Accept number or value
+    for i, (label, value) in enumerate(options, 1):
+        if choice == str(i) or choice.lower() == value:
+            return value
+    error(f"Invalid choice: {choice}")
+    sys.exit(1)
+
+
+def _prompt_input(prompt_msg, required=False):
+    """Prompt user for a text input. Empty skips."""
+    try:
+        value = input(f"{BLUE}[chat-force]{NC} {prompt_msg}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+    return value
+
+
 def cmd_init(args):
     template = "general"
-    tracker = "linear"
+    tracker = None  # None means: prompt interactively
     project_name = ""
     i = 0
     while i < len(args):
@@ -184,7 +197,7 @@ def cmd_init(args):
         error(f"Template '{template}' not found.")
         sys.exit(1)
 
-    if tracker not in ("linear", "jira"):
+    if tracker and tracker not in ("linear", "jira"):
         error(f"Unknown tracker: {tracker} (use 'linear' or 'jira')")
         sys.exit(1)
 
@@ -204,6 +217,12 @@ def cmd_init(args):
             run_cmd(["git", "init"], capture_output=True)
             ok("  Initialized git repository")
 
+    # Interactive tracker selection if not specified
+    if tracker is None:
+        print()
+        info("Which ticket tracker do you use?")
+        tracker = _prompt_choice("Select", [("Linear", "linear"), ("Jira", "jira")])
+
     info(f"Initializing project (template: {template}, tracker: {tracker})...")
 
     # CLAUDE.md
@@ -211,13 +230,49 @@ def cmd_init(args):
         shutil.copy2(tpl / "CLAUDE.md", "CLAUDE.md")
         ok("  Created CLAUDE.md")
 
-    # MCP config
+    # MCP config — copy template then inject real API key
     if not Path(".mcp.json").exists():
         if tracker == "jira" and (tpl / ".mcp.jira.json").exists():
             shutil.copy2(tpl / ".mcp.jira.json", ".mcp.json")
         elif (tpl / ".mcp.json").exists():
             shutil.copy2(tpl / ".mcp.json", ".mcp.json")
+
         if Path(".mcp.json").exists():
+            # Prompt for API credentials
+            mcp_data = json.loads(Path(".mcp.json").read_text())
+            updated = False
+
+            if tracker == "linear":
+                print()
+                info("Linear API key required for MCP integration.")
+                info("Get yours at: Linear → Settings → API → Personal API keys")
+                api_key = _prompt_input("LINEAR_API_KEY (enter to skip)")
+                if api_key:
+                    mcp_data["mcpServers"]["linear"]["env"]["LINEAR_API_KEY"] = api_key
+                    updated = True
+                else:
+                    warn("  Skipped — edit .mcp.json to add your LINEAR_API_KEY later")
+
+            elif tracker == "jira":
+                print()
+                info("Jira credentials required for MCP integration.")
+                info("Get an API token at: https://id.atlassian.com/manage-profile/security/api-tokens")
+                jira_url = _prompt_input("Jira instance URL (enter to skip)")
+                if jira_url:
+                    jira_email = _prompt_input("Jira email")
+                    jira_token = _prompt_input("Jira API token")
+                    if jira_email and jira_token:
+                        env = mcp_data["mcpServers"]["atlassian"]["env"]
+                        env["JIRA_URL"] = jira_url
+                        env["JIRA_EMAIL"] = jira_email
+                        env["JIRA_API_TOKEN"] = jira_token
+                        updated = True
+                if not updated:
+                    warn("  Skipped — edit .mcp.json to add your Jira credentials later")
+
+            if updated:
+                Path(".mcp.json").write_text(json.dumps(mcp_data, indent=2) + "\n")
+
             ok(f"  Created .mcp.json ({tracker} MCP config)")
 
     # .claude dirs

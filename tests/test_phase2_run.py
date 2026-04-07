@@ -54,7 +54,7 @@ def git_project_dir():
                        cwd=tmpdir, capture_output=True, check=True)
         subprocess.run(["git", "config", "user.name", "Test"],
                        cwd=tmpdir, capture_output=True, check=True)
-        result = run_chat_force("init", cwd=tmpdir)
+        result = run_chat_force("init", "--tracker", "linear", cwd=tmpdir)
         assert result.returncode == 0, f"init failed: {result.stderr}"
         subprocess.run(["git", "add", "-A"], cwd=tmpdir, capture_output=True, check=True)
         subprocess.run(["git", "commit", "-m", "initial"],
