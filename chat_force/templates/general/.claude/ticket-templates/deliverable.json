@@ -1,0 +1,36 @@
+{
+  "name": "deliverable",
+  "description": "Produce a specific artifact (landing page, ad copy, report, etc.)",
+  "required_inputs": [
+    {
+      "name": "title",
+      "type": "string",
+      "description": "Short ticket title"
+    },
+    {
+      "name": "description",
+      "type": "string",
+      "description": "What the deliverable is"
+    },
+    {
+      "name": "format",
+      "type": "string",
+      "description": "Expected output format (html, markdown, pdf, etc.)"
+    },
+    {
+      "name": "audience",
+      "type": "string",
+      "description": "Who is the deliverable for"
+    }
+  ],
+  "required_artifacts": [
+    "output/*"
+  ],
+  "acceptance_criteria": [
+    "Deliverable matches the requested format",
+    "Content addresses the stated goal",
+    "No hallucinated facts, URLs, or statistics",
+    "Follows brand voice (if defined in rules)"
+  ],
+  "skills": []
+}
