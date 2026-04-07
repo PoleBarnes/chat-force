@@ -94,90 +94,9 @@ def read_tracker():
 # ---------------------------------------------------------------------------
 
 def cmd_prototype(args):
-    """Local run: same three-phase flow as 'run', but no tracker integration.
-    Takes a description string which becomes the local ticket context."""
-    require_claude()
-    require_project()
-
-    # Parse args: everything that's not a flag is the description
-    description_parts = []
-    extra_args = []
-    i = 0
-    while i < len(args):
-        if args[i].startswith("-"):
-            extra_args.append(args[i])
-            i += 1
-        else:
-            description_parts.append(args[i])
-            i += 1
-
-    description = " ".join(description_parts)
-    if not description:
-        try:
-            description = input(f"{BLUE}[chat-force]{NC} What do you want to build? ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            sys.exit(1)
-        if not description:
-            error("Description required.")
-            sys.exit(1)
-
-    # Generate a slug for the branch name
-    slug = re.sub(r'[^a-z0-9]+', '-', description.lower())[:40].strip('-')
-    ticket_id = f"local-{slug}"
-    branch = f"prototype/{slug}"
-
-    # Checkout or create branch
-    rc = run_cmd(["git", "rev-parse", "--verify", branch],
-                 capture_output=True).returncode
-    resuming = rc == 0
-    if resuming:
-        info(f"Resuming on existing branch: {branch}")
-        run_cmd(["git", "checkout", branch])
-    else:
-        info(f"Creating new branch: {branch}")
-        run_cmd(["git", "checkout", "-b", branch])
-
-    # Write ticket context with the description as acceptance criteria
-    ctx = {
-        "ticket_id": ticket_id,
-        "branch": branch,
-        "attempt": 1,
-        "description": description,
-        "acceptance_criteria": [
-            "Deliverable directly addresses the stated goal",
-            "No hallucinated facts, URLs, or statistics",
-            "If external content was ingested, vault is updated",
-        ],
-    }
-    # Count previous attempts
-    result = run_cmd(
-        ["git", "log", "--oneline", f"--grep=WIP: {ticket_id}"],
-        capture_output=True, text=True,
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        ctx["attempt"] = len(result.stdout.strip().splitlines()) + 1
-
-    Path(".ticket-context").write_text(json.dumps(ctx, indent=2) + "\n")
-    run_cmd(["git", "add", ".ticket-context"])
-    run_cmd(["git", "commit", "-m", f"ticket-context: {ticket_id} attempt setup"],
-            capture_output=True)
-
-    # Phase 1: Swarm
-    _run_swarm(ticket_id, branch, extra_args)
-
-    # Phase 2: PM Verification
-    _run_pm_verification(ticket_id, branch)
-
-    # Phase 3: Mechanic Reflection
-    _run_mechanic_reflection(ticket_id, branch)
-
-    # Cleanup
-    ctx_path = Path(".ticket-context")
-    if ctx_path.exists():
-        ctx_path.unlink()
-
-    info(f"All phases complete for {ticket_id} on branch {branch}")
+    """Deprecated — redirects to cmd_run."""
+    warn("'prototype' is deprecated. Use 'chat-force run -p \"description\"' instead.")
+    cmd_run(["-p"] + args)
 
 
 def cmd_mechanic(args):
@@ -496,31 +415,42 @@ def cmd_list_templates(args):
 def cmd_run(args):
     require_claude()
     require_project()
-    require_tracker()
 
     ticket_id = ""
+    description = ""
     branch_override = ""
     extra_args = []
     i = 0
     while i < len(args):
-        if args[i] == "--branch" and i + 1 < len(args):
+        if args[i] == "-p" and i + 1 < len(args):
+            description = args[i + 1]
+            i += 2
+        elif args[i] == "--branch" and i + 1 < len(args):
             branch_override = args[i + 1]
             i += 2
         elif args[i].startswith("-"):
             extra_args.append(args[i])
             i += 1
-        elif not ticket_id:
+        elif not ticket_id and not description:
             ticket_id = args[i]
             i += 1
         else:
             extra_args.append(args[i])
             i += 1
 
-    if not ticket_id:
-        error("Usage: chat-force run <ticket-id> [--branch name]")
+    # Determine mode: ticket vs local
+    if description:
+        # Local mode: -p "description"
+        slug = re.sub(r'[^a-z0-9]+', '-', description.lower())[:40].strip('-')
+        ticket_id = f"local-{slug}"
+        branch = branch_override or f"run/{slug}"
+    elif ticket_id:
+        # Ticket mode: run PROJ-42
+        require_tracker()
+        branch = branch_override or f"ticket/{ticket_id}"
+    else:
+        error("Usage: chat-force run <ticket-id>  OR  chat-force run -p \"description\"")
         sys.exit(1)
-
-    branch = branch_override or f"ticket/{ticket_id}"
 
     # Checkout or create branch
     rc = run_cmd(["git", "rev-parse", "--verify", branch],
@@ -534,7 +464,30 @@ def cmd_run(args):
         run_cmd(["git", "checkout", "-b", branch])
 
     # Write and commit ticket context before swarm starts
-    _write_ticket_context(ticket_id, branch)
+    if description:
+        # Local mode: write description as the context
+        ctx = {
+            "ticket_id": ticket_id,
+            "branch": branch,
+            "attempt": 1,
+            "description": description,
+            "acceptance_criteria": [
+                "Deliverable directly addresses the stated goal",
+                "No hallucinated facts, URLs, or statistics",
+                "If external content was ingested, vault is updated",
+            ],
+        }
+        result = run_cmd(
+            ["git", "log", "--oneline", f"--grep=WIP: {ticket_id}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            ctx["attempt"] = len(result.stdout.strip().splitlines()) + 1
+        Path(".ticket-context").write_text(json.dumps(ctx, indent=2) + "\n")
+    else:
+        # Ticket mode: write context from template
+        _write_ticket_context(ticket_id, branch)
+
     run_cmd(["git", "add", ".ticket-context"])
     run_cmd(["git", "commit", "-m", f"ticket-context: {ticket_id} attempt setup"],
             capture_output=True)
@@ -549,9 +502,9 @@ def cmd_run(args):
     _run_mechanic_reflection(ticket_id, branch)
 
     # Cleanup
-    ctx = Path(".ticket-context")
-    if ctx.exists():
-        ctx.unlink()
+    ctx_path = Path(".ticket-context")
+    if ctx_path.exists():
+        ctx_path.unlink()
 
     info(f"All phases complete for {ticket_id} on branch {branch}")
 
@@ -736,8 +689,8 @@ def cmd_help():
     print(f"""chat-force v{VERSION} — self-improving prototyping tool
 
 Usage:
-  chat-force prototype "description"     Local run: swarm → PM → mechanic (no tracker)
-  chat-force run <ticket-id> [--branch] Execute ticket (swarm → PM → mechanic)
+  chat-force run <ticket-id>             Execute ticket (swarm → PM → mechanic)
+  chat-force run -p "description"       Local run (swarm → PM → mechanic, no tracker)
   chat-force mechanic [args]            Manual mechanic review of current project
   chat-force create-ticket --template T Create ticket (--field or --interactive)
   chat-force list-templates             List available ticket templates
