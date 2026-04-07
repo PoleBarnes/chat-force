@@ -378,7 +378,7 @@ _run_swarm() {
 
     # Build the swarm prompt with ticket context
     local swarm_prompt
-    swarm_prompt="You are executing ticket ${ticket_id}. Read .ticket-context for the full ticket details including acceptance criteria. Work to satisfy all acceptance criteria. When done, ensure all artifacts are saved and committed."
+    swarm_prompt="You are executing ticket ${ticket_id}. Read .ticket-context for the full ticket details including acceptance criteria. IMPORTANT: Before starting work, read the ticket's comment history in Linear (use list_comments for ${ticket_id}) to check for previous attempts. If prior attempts exist, read the PM Review comments to understand what failed and why — do NOT repeat the same mistakes. Work to satisfy all acceptance criteria. When done, ensure all artifacts are saved and committed."
 
     local exit_code=0
     claude --session-id "$session_id" -p "$swarm_prompt" "$@" || exit_code=$?
