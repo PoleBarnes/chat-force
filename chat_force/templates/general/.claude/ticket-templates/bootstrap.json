@@ -1,0 +1,37 @@
+{
+  "name": "bootstrap",
+  "description": "Initialize a new project \u2014 generate a project plan as a set of tickets",
+  "required_inputs": [
+    {
+      "name": "title",
+      "type": "string",
+      "description": "Project name"
+    },
+    {
+      "name": "description",
+      "type": "string",
+      "description": "What this project is and what it should accomplish"
+    },
+    {
+      "name": "goals",
+      "type": "string",
+      "description": "Key outcomes and success criteria for the project"
+    },
+    {
+      "name": "constraints",
+      "type": "string",
+      "description": "Boundaries, limitations, timeline, or technology constraints"
+    }
+  ],
+  "required_artifacts": [
+    ".claude/ticket-templates/*.yaml"
+  ],
+  "acceptance_criteria": [
+    "A project plan exists with sequenced tickets",
+    "Each generated ticket has acceptance criteria and a proper template type",
+    "Tickets have clear dependencies and ordering",
+    "The plan covers all stated goals",
+    "Constraints are respected in the plan"
+  ],
+  "skills": []
+}

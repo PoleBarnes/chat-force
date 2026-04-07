@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main, sprint/*, pivot/*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-cli:
+    name: Chat-Force CLI Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Run CLI tests
+        run: |
+          uv run --python 3.13 \
+            --with docker,pytest,pydantic,"pyyaml","ruamel.yaml","slack_sdk>=3.41.0","slack_bolt>=1.27.0" \
+            pytest tests/test_ticket_templates.py tests/test_branch_management.py \
+                   tests/test_phase2_run.py tests/test_phase3_templates.py \
+                   tests/test_status_command.py tests/test_tracker_selection.py \
+                   tests/test_coverage_gaps.py -v
+
+  test-engine:
+    name: Engine Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Run engine tests
+        run: |
+          uv run --python 3.13 \
+            --with docker,pytest,pydantic,"pyyaml","ruamel.yaml","slack_sdk>=3.41.0","slack_bolt>=1.27.0" \
+            pytest tests/test_pipeline.py tests/test_e2e_integration.py tests/test_slack_integration.py tests/test_docker_integration.py -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Syntax check
+        run: |
+          uv run --python 3.13 python -c "
+          import py_compile, sys, glob
+          errors = []
+          for f in glob.glob('pipeline/**/*.py', recursive=True) + glob.glob('worker/**/*.py', recursive=True) + glob.glob('chat_force/**/*.py', recursive=True):
+              try:
+                  py_compile.compile(f, doraise=True)
+              except py_compile.PyCompileError as e:
+                  errors.append(str(e))
+          if errors:
+              print('\n'.join(errors))
+              sys.exit(1)
+          print('All files OK')
+          "
+
+  build-worker:
+    needs: [test-cli, test-engine, lint]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: worker/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/worker:latest
+            ghcr.io/${{ github.repository }}/worker:${{ github.sha }}

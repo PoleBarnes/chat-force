@@ -41,7 +41,7 @@ environment-appropriate values:
 | `SLACK_APP_TOKEN`        | Slack socket mode                |
 | `SLACK_SIGNING_SECRET`   | Webhook verification             |
 | `GITHUB_TOKEN`           | Repository access                |
-| `OPENCLAW_API_KEY`       | OpenClaw platform access         |
+| `ANTHROPIC_API_KEY`      | Claude API access                |
 
 ## Environment Variable Convention
 

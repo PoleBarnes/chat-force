@@ -1,0 +1,58 @@
+{
+  "_metadata": {
+    "major_version": 1,
+    "minor_version": 1
+  },
+  "display_information": {
+    "name": "REPLACE_ME_bot_name",
+    "description": "REPLACE_ME one-line description of what this bot does (max 140 chars)",
+    "background_color": "#000000",
+    "long_description": "REPLACE_ME — multi-paragraph explanation of this bot's mission, responsibilities, and operating style. Customer-facing brand voice. Max 4000 chars. Use \\n\\n for paragraph breaks and \\r\\n for line breaks within paragraphs, matching Slack's rendering."
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "REPLACE_ME_bot_name",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "assistant:write",
+        "app_mentions:read",
+        "channels:history",
+        "channels:join",
+        "chat:write",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "reactions:read",
+        "reactions:write",
+        "users:read"
+      ]
+    },
+    "pkce_enabled": false
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention",
+        "assistant_thread_context_changed",
+        "assistant_thread_started",
+        "message.channels",
+        "message.groups",
+        "message.im"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}

@@ -1,298 +1,190 @@
-"""Validate security configurations.
+"""Adversarial security tests for the chat-force engine.
 
-Tests cover:
-  - exec-approvals.json structure and blocked commands
-  - Audit logger write/read/scrub functionality
-  - Secret pattern detection
-  - Git pre-push hook existence
+These tests verify that the security controls actually block the attacks
+they're designed to prevent. Each test targets a specific REQUIREMENTS.md
+Part 1 Security item.
 """
 
-import json
-import re
-import sys
+from __future__ import annotations
+
+import os
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-# Add project root to sys.path so audit/ is importable as a top-level package
-sys.path.insert(0, str(PROJECT_ROOT))
-
-from audit.audit_logger import AuditLogger, AuditEventType
-from audit.secret_patterns import scan_text, has_secrets, scrub_text, COMPILED_PATTERNS
+from pipeline.config import PipelineConfig
+from pipeline.changeset_extractor import ChangesetExtractor, SELF_MODIFICATION_DENY_LIST
+from pipeline.pr_creator import PRCreator
+from pipeline.scrub import scrub_secrets
 
 
 # =========================================================================
-# exec-approvals.json tests
+# Self-modification deny-list (REQUIREMENTS: Worker cannot modify engine)
 # =========================================================================
 
 
-class TestExecApprovals:
-    """Test the exec-approvals.json configuration."""
+class TestSelfModificationAdversarial:
+    """Adversarial tests: Worker cannot modify engine files."""
 
-    @pytest.fixture
-    def exec_approvals(self):
-        path = PROJECT_ROOT / "security" / "exec-approvals.json"
-        assert path.exists(), "exec-approvals.json not found"
-        return json.loads(path.read_text(encoding="utf-8"))
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ".github/workflows/ci.yml",
+            "pipeline/config.py",
+            "pipeline/slack_listener.py",
+            "worker/Dockerfile",
+            "worker/entrypoint.py",
+            "mechanic/config/SOUL.md",
+            "tests/test_pipeline.py",
+        ],
+    )
+    def test_each_denied_prefix_is_caught(self, path: str) -> None:
+        """Every denied prefix in the deny-list must be caught."""
+        git_changes = {"new_files": [path], "modified_files": [], "deleted_files": []}
+        denied = ChangesetExtractor._check_self_modification(git_changes)
+        assert path in denied, f"{path} should be denied but was allowed"
 
-    def test_exec_approvals_is_valid_json(self, exec_approvals):
-        """exec-approvals.json must parse as a valid JSON object."""
-        assert isinstance(exec_approvals, dict)
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "skills/new-skill.md",
+            "identity/brand.md",
+            "eval/criteria.yaml",
+            "vault/index.md",
+            "landing-page.html",
+            "README.md",
+        ],
+    )
+    def test_harness_files_are_allowed(self, path: str) -> None:
+        """Legitimate harness files must NOT be denied."""
+        git_changes = {"new_files": [path], "modified_files": [], "deleted_files": []}
+        denied = ChangesetExtractor._check_self_modification(git_changes)
+        assert path not in denied, f"{path} should be allowed but was denied"
 
-    def test_exec_approvals_has_required_structure(self, exec_approvals):
-        """Must have allowed, blocked, and enforcement sections."""
-        assert "allowed" in exec_approvals, "Missing 'allowed' section"
-        assert "blocked" in exec_approvals, "Missing 'blocked' section"
-        assert "enforcement" in exec_approvals, "Missing 'enforcement' section"
+    def test_leading_slash_stripped(self) -> None:
+        """Paths starting with / should still be caught."""
+        git_changes = {"new_files": ["/pipeline/evil.py"], "modified_files": [], "deleted_files": []}
+        denied = ChangesetExtractor._check_self_modification(git_changes)
+        assert "/pipeline/evil.py" in denied
 
-    def test_allowed_commands_have_structure(self, exec_approvals):
-        """Each allowed command must have command and description."""
-        for entry in exec_approvals["allowed"]:
-            assert "command" in entry, f"Allowed entry missing 'command': {entry}"
-            assert "description" in entry, f"Allowed entry missing 'description': {entry}"
-
-    def test_blocked_patterns_have_structure(self, exec_approvals):
-        """Each blocked pattern must have pattern and reason."""
-        for entry in exec_approvals["blocked"]:
-            assert "pattern" in entry, f"Blocked entry missing 'pattern': {entry}"
-            assert "reason" in entry, f"Blocked entry missing 'reason': {entry}"
-
-    def test_dangerous_commands_are_blocked(self, exec_approvals):
-        """rm -rf, chmod, sudo, etc. must appear in the blocked list."""
-        blocked_patterns = [b["pattern"].lower() for b in exec_approvals["blocked"]]
-        dangerous = ["rm -rf", "chmod", "sudo", "kill", "shutdown"]
-        for cmd in dangerous:
-            found = any(cmd in pattern for pattern in blocked_patterns)
-            assert found, f"Dangerous command '{cmd}' is not in blocked list"
-
-    def test_force_push_is_blocked(self, exec_approvals):
-        """Force push patterns must be blocked."""
-        blocked_patterns = [b["pattern"] for b in exec_approvals["blocked"]]
-        assert any("force" in p or "-f" in p for p in blocked_patterns), (
-            "git push --force or -f not found in blocked patterns"
-        )
-
-    def test_main_branch_push_is_blocked(self, exec_approvals):
-        """Pushing directly to main/master must be blocked."""
-        blocked_patterns = [b["pattern"] for b in exec_approvals["blocked"]]
-        assert any("main" in p and "push" in p for p in blocked_patterns), (
-            "Direct push to main not found in blocked patterns"
-        )
-
-    def test_enforcement_is_deny_by_default(self, exec_approvals):
-        """Default policy should be deny."""
-        enforcement = exec_approvals.get("enforcement", {})
-        assert enforcement.get("default_policy") == "deny", (
-            "Enforcement default_policy should be 'deny'"
-        )
-
-    def test_self_modification_prevention(self, exec_approvals):
-        """Must have self-modification prevention for config files."""
-        smp = exec_approvals.get("self_modification_prevention")
-        assert smp is not None, "Missing self_modification_prevention section"
-        assert "protected_paths" in smp
-        assert len(smp["protected_paths"]) > 0
+    def test_deny_list_completeness(self) -> None:
+        """The deny-list must include all engine-critical paths."""
+        required = {".github/", "worker/", "pipeline/", "mechanic/", "tests/"}
+        actual = set(SELF_MODIFICATION_DENY_LIST)
+        assert required == actual, f"Missing from deny-list: {required - actual}"
 
 
 # =========================================================================
-# Audit logger tests
+# Path traversal (REQUIREMENTS: PRCreator cannot write outside checkout)
 # =========================================================================
 
 
-class TestAuditLogger:
-    """Test the audit logger module."""
+class TestPathTraversalAdversarial:
+    """Adversarial tests: PRCreator cannot write outside the checkout root."""
 
-    @pytest.fixture
-    def temp_log_dir(self, tmp_path):
-        return str(tmp_path / "audit_logs")
+    def test_dot_dot_slash_attack(self, tmp_path: Path) -> None:
+        pr = PRCreator(PipelineConfig(output_base=str(tmp_path)), "run")
+        checkout = str(tmp_path / "checkout")
+        os.makedirs(checkout)
+        with pytest.raises(ValueError, match="Path traversal rejected"):
+            pr._write_file(checkout, "../../../etc/shadow", {"../../../etc/shadow": "x"}, None)
 
-    @pytest.fixture
-    def audit_logger(self, temp_log_dir):
-        return AuditLogger(workspace_id="test-workspace", log_dir=temp_log_dir)
+    def test_encoded_traversal(self, tmp_path: Path) -> None:
+        """Paths with encoded components should still be caught."""
+        pr = PRCreator(PipelineConfig(output_base=str(tmp_path)), "run")
+        checkout = str(tmp_path / "checkout")
+        os.makedirs(checkout)
+        # Even if the path looks weird, realpath resolves it
+        with pytest.raises(ValueError, match="Path traversal rejected"):
+            pr._write_file(checkout, "foo/../../../../../../tmp/evil", {"foo/../../../../../../tmp/evil": "x"}, None)
 
-    def test_audit_logger_writes_events(self, audit_logger):
-        """AuditLogger must write events to log files."""
-        event = audit_logger.log(
-            AuditEventType.TASK_START,
-            {"task": "test task", "input": "hello world"},
-        )
-        assert event["event_type"] == "task_start"
-        assert event["workspace_id"] == "test-workspace"
-        assert "timestamp" in event
-
-    def test_audit_logger_reads_events(self, audit_logger):
-        """AuditLogger must be able to read back written events."""
-        audit_logger.log(AuditEventType.TASK_START, {"task": "test1"})
-        audit_logger.log(AuditEventType.TASK_COMPLETE, {"task": "test1"})
-        audit_logger.log(AuditEventType.TASK_START, {"task": "test2"})
-
-        all_events = audit_logger.get_events()
-        assert len(all_events) == 3
-
-        starts = audit_logger.get_events(event_type=AuditEventType.TASK_START)
-        assert len(starts) == 2
-
-    def test_audit_logger_scrubs_secrets(self, audit_logger):
-        """Secret patterns must be redacted when sensitive=True."""
-        event = audit_logger.log(
-            AuditEventType.LLM_CALL,
-            {
-                "api_key": "sk-ant-abc123def456ghi789jkl012",
-                "token": "xoxb-123456-789012-abcdef",
-                "model": "claude-opus-4-6",
-                "prompt": "Hello world",
-            },
-            sensitive=True,
-        )
-        details = event["details"]
-        assert details["api_key"] == "[REDACTED]", (
-            f"api_key was not redacted: {details['api_key']}"
-        )
-        assert details["token"] == "[REDACTED]", (
-            f"token was not redacted: {details['token']}"
-        )
-        assert details["model"] == "claude-opus-4-6"
-
-    def test_audit_logger_scrubs_secrets_in_values(self, audit_logger):
-        """Secret patterns in string values should be caught by regex."""
-        event = audit_logger.log(
-            AuditEventType.COMMAND_EXECUTED,
-            {
-                "command": "curl -H 'Authorization: bearer sk-ant-abcdefghijklmnopqrstuvwxyz'",
-                "result": "some output",
-            },
-            sensitive=True,
-        )
-        details = event["details"]
-        assert details["command"] == "[REDACTED]", (
-            f"Command with secret was not redacted: {details['command']}"
-        )
-
-    def test_audit_logger_convenience_methods(self, audit_logger):
-        """Convenience methods (log_command_blocked, etc.) should work."""
-        event = audit_logger.log_command_blocked("rm -rf /", "Recursive deletion blocked")
-        assert event["event_type"] == "command_blocked"
-        assert event["details"]["command"] == "rm -rf /"
-
-        event = audit_logger.log_command_executed("ls -la", exit_code=0)
-        assert event["event_type"] == "command_executed"
-
-        event = audit_logger.log_secret_access("ANTHROPIC_AUTH_TOKEN", "LLM call")
-        assert event["event_type"] == "secret_access"
-
-    def test_audit_logger_log_rotation(self, audit_logger, temp_log_dir):
-        """Log rotation should delete old files."""
-        log_dir = Path(temp_log_dir)
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        old_file = log_dir / "2020-01-01.jsonl"
-        old_file.write_text('{"test": "old"}\n')
-
-        audit_logger.log(AuditEventType.TASK_START, {"task": "recent"})
-
-        deleted = audit_logger.rotate_logs()
-        assert deleted >= 1, "Expected at least 1 old file to be deleted"
-        assert not old_file.exists(), "Old log file should have been deleted"
+    def test_symlink_escape(self, tmp_path: Path) -> None:
+        """Symlinks that escape the checkout should be caught by realpath."""
+        pr = PRCreator(PipelineConfig(output_base=str(tmp_path)), "run")
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        # Create a symlink inside checkout that points outside
+        link = checkout / "escape"
+        link.symlink_to("/tmp")
+        with pytest.raises(ValueError, match="Path traversal rejected"):
+            pr._write_file(str(checkout), "escape/evil.txt", {"escape/evil.txt": "x"}, None)
 
 
 # =========================================================================
-# Secret patterns tests
+# Secret scrubbing (REQUIREMENTS: tokens never in Slack messages)
 # =========================================================================
 
 
-class TestSecretPatterns:
-    """Test the secret detection patterns module."""
+class TestSecretScrubAdversarial:
+    """Adversarial tests: secrets must never leak through error messages."""
 
-    def test_detect_anthropic_key(self):
-        """Must detect Anthropic API key format."""
-        text = "My key is sk-ant-abcdefghijklmnopqrstuvwxyz"
-        assert has_secrets(text, min_severity="critical")
-        findings = scan_text(text)
-        assert len(findings) >= 1
-        assert any("Anthropic" in f["pattern_name"] for f in findings)
-
-    def test_detect_slack_bot_token(self):
-        """Must detect Slack bot token format."""
-        text = "SLACK_TOKEN=xoxb-123456789012-123456789012-abcdefghij"
-        assert has_secrets(text, min_severity="critical")
-
-    def test_detect_github_pat(self):
-        """Must detect GitHub Personal Access Token."""
-        text = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh12"
-        assert has_secrets(text, min_severity="critical")
-
-    def test_detect_doppler_service_token(self):
-        """Must detect Doppler service token."""
-        text = "dp.st.some-project_some-env_some-token-value"
-        assert has_secrets(text, min_severity="critical")
-
-    def test_detect_private_key(self):
-        """Must detect PEM private key headers."""
-        text = "-----BEGIN RSA PRIVATE KEY-----\nfoo"
-        assert has_secrets(text, min_severity="critical")
-
-    def test_no_false_positive_on_normal_text(self):
-        """Normal text should not trigger secret detection."""
-        text = "This is a normal message about building a campaign for BlackTie."
-        assert not has_secrets(text, min_severity="high")
-
-    def test_scrub_text_replaces_secrets(self):
-        """scrub_text should replace detected secrets with [REDACTED]."""
-        text = "API key: sk-ant-abcdefghijklmnopqrstuvwxyz and more text"
-        scrubbed = scrub_text(text)
-        assert "sk-ant" not in scrubbed
-        assert "[REDACTED]" in scrubbed
-        assert "and more text" in scrubbed
-
-    def test_all_patterns_compile(self):
-        """All patterns in COMPILED_PATTERNS should be valid compiled regexes."""
-        assert len(COMPILED_PATTERNS) >= 15, (
-            f"Expected at least 15 patterns, found {len(COMPILED_PATTERNS)}"
+    def test_real_world_traceback_with_token(self) -> None:
+        """A traceback containing a real token must be scrubbed."""
+        traceback_text = (
+            'Traceback (most recent call last):\n'
+            '  File "pipeline/pr_creator.py", line 92, in create\n'
+            '    _run(["git", "clone", "https://ghp_realtoken123@github.com/org/repo.git"])\n'
+            'RuntimeError: Command failed (128): git clone\n'
+            'stderr: fatal: Authentication failed for '
+            "'https://ghp_realtoken123@github.com/org/repo.git'"
         )
-        for pattern, name, severity in COMPILED_PATTERNS:
-            assert isinstance(pattern, re.Pattern), (
-                f"Pattern '{name}' is not compiled"
-            )
-            assert severity in ("critical", "high", "medium"), (
-                f"Pattern '{name}' has invalid severity: {severity}"
-            )
+        scrubbed = scrub_secrets(traceback_text)
+        assert "ghp_realtoken123" not in scrubbed
+        assert "Traceback" in scrubbed  # structure preserved
+
+    def test_slack_error_with_bot_token(self) -> None:
+        """Slack API errors sometimes echo the token."""
+        error = "invalid_auth: token xoxb-1234567890-1234567890123-abcdefghij is revoked"
+        scrubbed = scrub_secrets(error)
+        assert "xoxb-" not in scrubbed
+        assert "[SLACK_BOT_TOKEN]" in scrubbed
+
+    def test_anthropic_key_in_env_dump(self) -> None:
+        """If someone accidentally dumps env vars, the API key must be scrubbed."""
+        env_dump = "ANTHROPIC_API_KEY=sk-ant-api03-really-long-secret-key-here\nPATH=/usr/bin"
+        scrubbed = scrub_secrets(env_dump)
+        assert "sk-ant-" not in scrubbed
+        assert "PATH=/usr/bin" in scrubbed
+
+    def test_multiple_different_token_types(self) -> None:
+        """Multiple different token types in one string must all be scrubbed."""
+        mixed = (
+            "bot=xoxb-111-222-abc "
+            "app=xapp-1-ABC-xyz "
+            "gh=ghp_secrettoken "
+            "claude=sk-ant-api03-key"
+        )
+        scrubbed = scrub_secrets(mixed)
+        for prefix in ("xoxb-", "xapp-", "ghp_", "sk-ant-"):
+            assert prefix not in scrubbed
 
 
 # =========================================================================
-# Git hook tests
+# Container hardening (REQUIREMENTS: cap_drop, no-new-privileges, limits)
 # =========================================================================
 
 
-class TestGitHook:
-    """Test the git pre-push hook script."""
+class TestContainerHardeningConfig:
+    """Verify that WorkerManager passes the right security options to Docker."""
 
-    def test_git_hook_script_exists(self):
-        """The pre-push hook script must be present."""
-        hook_path = PROJECT_ROOT / "scripts" / "git-pre-push-hook.sh"
-        assert hook_path.exists(), "scripts/git-pre-push-hook.sh not found"
+    def test_containers_run_receives_security_options(self, config_with_harness):
+        """containers.run must include cap_drop, security_opt, mem_limit, pids_limit."""
+        from pipeline.worker_manager import WorkerManager
 
-    def test_git_hook_has_shebang(self):
-        """The hook script must start with a proper shebang."""
-        hook_path = PROJECT_ROOT / "scripts" / "git-pre-push-hook.sh"
-        first_line = hook_path.read_text(encoding="utf-8").split("\n")[0]
-        assert first_line.startswith("#!/"), (
-            f"Hook script missing shebang, starts with: {first_line}"
-        )
+        with patch("pipeline.worker_manager.docker") as mock_docker:
+            mock_client = MagicMock()
+            mock_docker.from_env.return_value = mock_client
+            container = MagicMock()
+            container.id = "abc" + "0" * 61
+            mock_client.containers.run.return_value = container
+            mock_client.images.get.return_value = MagicMock()
 
-    def test_git_hook_references_patterns(self):
-        """The hook script should reference the canonical secret_patterns module."""
-        hook_path = PROJECT_ROOT / "scripts" / "git-pre-push-hook.sh"
-        content = hook_path.read_text(encoding="utf-8")
-        assert "secret_patterns" in content, (
-            "Hook script does not reference secret_patterns module"
-        )
+            wm = WorkerManager(config_with_harness, "test-run")
+            wm.start("task")
 
-    def test_git_hook_has_fallback_patterns(self):
-        """The hook script should include grep-based fallback patterns."""
-        hook_path = PROJECT_ROOT / "scripts" / "git-pre-push-hook.sh"
-        content = hook_path.read_text(encoding="utf-8")
-        assert "FALLBACK_PATTERNS" in content, (
-            "Hook script missing FALLBACK_PATTERNS for grep fallback"
-        )
+            kwargs = mock_client.containers.run.call_args[1]
+            assert kwargs["cap_drop"] == ["ALL"]
+            assert kwargs["security_opt"] == ["no-new-privileges"]
+            assert kwargs["mem_limit"] == "2g"
+            assert kwargs["pids_limit"] == 256

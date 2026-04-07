@@ -1,9 +1,0 @@
-{
-  "profiles": {
-    "anthropic:default": {
-      "provider": "anthropic",
-      "type": "api_key",
-      "key": "${ANTHROPIC_AUTH_TOKEN}"
-    }
-  }
-}

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chat-force"
+version = "0.2.0"
+description = "Ticket-driven self-improving prototyping tool"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+chat-force = "chat_force.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["chat_force*"]
+
+[tool.setuptools.package-data]
+chat_force = ["templates/**/*"]
