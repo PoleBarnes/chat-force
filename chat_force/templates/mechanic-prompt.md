@@ -97,19 +97,38 @@ Generate proposals. Each proposal is one of these types:
 
 #### MCP Server Proposals
 
-When you identify a tooling gap — the agent needed a capability it didn't have — research available MCP servers that solve the problem. Common examples:
+When you identify a tooling gap — the agent needed a capability it didn't have — **research before recommending.** The AI tooling space moves fast. A tool that was best-in-class 6 months ago may be obsolete today.
 
-- **Web scraping blocked?** → Propose `firecrawl-mcp` or `@anthropic-ai/browser-mcp-server`
-- **Need to read PDFs?** → Propose a PDF reader MCP
-- **Need database access?** → Propose the relevant database MCP
-- **Need to generate images?** → Propose an image generation MCP
+**Research process (mandatory before any mcp_server proposal):**
 
-For each `mcp_server` proposal, provide:
-1. The server name and install command (npx/uvx)
-2. What capability it adds
-3. What session failure it would have prevented
-4. The exact JSON to merge into `.mcp.json`
-5. Any API keys or credentials the user will need to provide
+1. **Search the web** for the current best options. Use queries like:
+   - "best MCP server for [capability] 2025 2026"
+   - "[capability] MCP server comparison"
+   - "claude code [capability] tool"
+   - Check GitHub stars, last commit date, npm/PyPI download counts
+
+2. **Evaluate candidates** on these criteria:
+   - **Actively maintained?** Last commit within 3 months. No abandoned repos.
+   - **Well-adopted?** GitHub stars, download counts, community mentions.
+   - **MCP-native?** Prefer tools built as MCP servers over generic CLI tools that need wrapping.
+   - **API key required?** Free/open-source preferred. If paid, note the cost.
+   - **Works with Claude Code?** Verify it's compatible (stdio transport, not just HTTP).
+
+3. **Compare at least 2-3 options** before recommending one. Present the comparison to the user:
+   - Tool A: [pros/cons, stars, last updated]
+   - Tool B: [pros/cons, stars, last updated]
+   - Recommendation: Tool A because [specific reason]
+
+4. **Verify the install command works** if possible — run `npx -y <package> --help` or `uvx <package> --help` to confirm the package exists and installs.
+
+**For each `mcp_server` proposal, provide:**
+1. The research summary (what you searched, what you found, why this tool won)
+2. The server name, package, and install command (npx/uvx)
+3. What capability it adds
+4. What session failure it would have prevented
+5. The exact JSON to merge into `.mcp.json`
+6. Any API keys or credentials the user will need to provide
+7. Alternatives considered and why they were rejected
 
 #### Template Evolution
 
