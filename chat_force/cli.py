@@ -416,29 +416,32 @@ def cmd_run(args):
 
     extra_args = [a for a in args if a.startswith("-")]
 
-    # Build the system prompt that teaches Claude how to operate
+    # Print welcome banner — we control this, not Claude
+    print()
+    print(f"  {BLUE}chat-force{NC} v{VERSION}")
+    print()
+    print(f"  This session runs three phases:")
+    print(f"    {GREEN}1. BUILD{NC}   — You work with Claude to build the deliverable")
+    print(f"    {YELLOW}2. REVIEW{NC}  — A PM agent checks output against acceptance criteria")
+    print(f"    {BLUE}3. IMPROVE{NC} — A mechanic agent analyzes and improves the harness")
+    print()
+    print(f"  {GREEN}Phase 1: BUILD{NC} — starting now")
+    print(f"  Give Claude a ticket ID (e.g. PROJ-42) or describe what to build.")
+    print()
+
+    # System prompt — work instructions only, no greeting
     system_prompt = (
-        "You are a chat-force agent. This session runs three phases automatically:\n\n"
-        "  Phase 1: BUILD — You do the work (this phase, interactive)\n"
-        "  Phase 2: REVIEW — A PM agent checks your output against acceptance criteria\n"
-        "  Phase 3: IMPROVE — A mechanic agent analyzes the session and improves the harness\n\n"
-        "You are in Phase 1 now.\n\n"
-        "START by greeting the user briefly, explaining the three phases in one sentence, "
-        "then ask:\n\n"
-        "  \"What are we working on? Give me a ticket ID (e.g. PROJ-42) or describe the task.\"\n\n"
-        "If they give a ticket ID:\n"
-        "- Pull the ticket from the tracker (Linear or Jira via MCP)\n"
-        "- Read the description and acceptance criteria\n"
-        "- Create branch ticket/<id> and begin work\n\n"
-        "If they describe a task:\n"
-        "- Confirm you understand, then start working\n\n"
+        "You are a chat-force build agent in Phase 1 (BUILD).\n\n"
+        "The user will give you either a ticket ID or a task description. "
+        "If they give a ticket ID, pull it from the tracker via MCP. "
+        "If they describe a task, confirm and start working.\n\n"
         "During work:\n"
         "- Read CLAUDE.md for project context\n"
         "- Read .claude/rules/ and .claude/skills/ for project rules and skills\n"
         "- Check git log and existing files — if previous work exists, don't redo it\n"
         "- Read vault/ for project knowledge\n"
         "- Follow the session-close checklist in CLAUDE.md before finishing\n"
-        "- When done, commit your work and tell the user Phase 1 is complete\n"
+        "- When done, commit your work\n"
     )
 
     prompt_file = Path(".chat-force-swarm-prompt.md")
@@ -450,8 +453,9 @@ def cmd_run(args):
         Path(".ticket-context").write_text(json.dumps(ctx, indent=2) + "\n")
 
     session_id = gen_session_id()
-    info("=== chat-force run ===")
-    info(f"Session: {session_id}")
+
+    print(f"  {NC}When done building, type {GREEN}/exit{NC} to move to the Review phase.")
+    print(f"  {NC}(Don't use Ctrl+C — that aborts the entire sequence.)")
     print()
 
     # Launch claude interactively with full UI
@@ -464,9 +468,8 @@ def cmd_run(args):
     if prompt_file.exists():
         prompt_file.unlink()
 
-    print()
     if rc not in (0, 130):
-        warn(f"Swarm exited with code {rc}")
+        warn(f"Build phase exited with code {rc}")
 
     # Commit any uncommitted work
     result = run_cmd(["git", "status", "--porcelain"], capture_output=True, text=True)
@@ -475,15 +478,31 @@ def cmd_run(args):
         run_cmd(["git", "commit", "-m", "WIP: chat-force session"])
         commit = run_cmd(["git", "rev-parse", "--short", "HEAD"],
                          capture_output=True, text=True).stdout.strip()
-        ok(f"Swarm committed: {commit}")
+        ok(f"Build committed: {commit}")
 
     # Phase 2: PM Verification
+    print()
+    print(f"  {'=' * 60}")
+    print(f"  {YELLOW}Phase 2: REVIEW{NC} — PM verification")
+    print(f"  Checking deliverables against acceptance criteria...")
+    print(f"  {'=' * 60}")
+    print()
     _run_pm_verification("session", "current")
 
     # Phase 3: Mechanic Reflection
+    print()
+    print(f"  {'=' * 60}")
+    print(f"  {BLUE}Phase 3: IMPROVE{NC} — Mechanic analysis")
+    print(f"  Analyzing session for harness improvements...")
+    print(f"  {'=' * 60}")
+    print()
     _run_mechanic_reflection("session", "current")
 
-    ok("All phases complete.")
+    print()
+    print(f"  {'=' * 60}")
+    ok("All three phases complete.")
+    print(f"  {'=' * 60}")
+    print()
 
 
 def _write_ticket_context(ticket_id, branch):
