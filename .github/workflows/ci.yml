@@ -18,7 +18,7 @@ jobs:
 
       - name: Run CLI tests
         run: |
-          uv run --python 3.13 --with pytest \
+          uv run --python 3.13 --with pytest,pydantic \
             pytest tests/test_ticket_templates.py tests/test_branch_management.py \
                    tests/test_phase2_run.py tests/test_phase3_templates.py \
                    tests/test_status_command.py tests/test_tracker_selection.py -v
@@ -35,7 +35,7 @@ jobs:
       - name: Run engine tests
         run: |
           uv run --python 3.13 \
-            --with docker,pytest,"slack_sdk>=3.41.0","slack_bolt>=1.27.0" \
+            --with docker,pytest,pydantic,"slack_sdk>=3.41.0","slack_bolt>=1.27.0" \
             pytest tests/test_pipeline.py tests/test_e2e_integration.py tests/test_slack_integration.py tests/test_docker_integration.py -v
 
   lint:
