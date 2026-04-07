@@ -466,6 +466,45 @@ _run_mechanic_reflection() {
 }
 
 # ---------------------------------------------------------------------------
+cmd_status() {
+    require_project
+
+    local branch
+    branch=$(git branch --show-current 2>/dev/null || echo "(detached)")
+
+    local ticket_id=""
+    local attempts=0
+
+    # Extract ticket ID from branch name
+    if [[ "$branch" == ticket/* ]]; then
+        ticket_id="${branch#ticket/}"
+        attempts=$(git log --oneline --grep="WIP: ${ticket_id}" 2>/dev/null | wc -l | tr -d ' ')
+    fi
+
+    echo ""
+    info "Project Status"
+    echo "  Branch:     $branch"
+
+    if [[ -n "$ticket_id" ]]; then
+        echo "  Ticket:     $ticket_id"
+        echo "  Attempts:   $attempts"
+
+        # Show ticket context if it exists
+        if [[ -f ".ticket-context" ]]; then
+            echo "  Context:    .ticket-context (active session)"
+        fi
+    else
+        echo "  Ticket:     (none — not on a ticket branch)"
+    fi
+
+    # Show uncommitted changes
+    local changes
+    changes=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    echo "  Changes:    $changes uncommitted file(s)"
+    echo ""
+}
+
+# ---------------------------------------------------------------------------
 cmd_help() {
     cat <<EOF
 chat-force v${CHAT_FORCE_VERSION} — self-improving prototyping tool
@@ -476,6 +515,7 @@ Usage:
   chat-force run <ticket-id> [--branch] Execute ticket (swarm → PM → mechanic)
   chat-force create-ticket --template T Create ticket (--field or --interactive)
   chat-force list-templates             List available ticket templates
+  chat-force status                     Show current ticket, branch, attempts
   chat-force init [--template T]        Scaffold a new project
   chat-force help                       This help
 
@@ -497,6 +537,7 @@ case "${1:-help}" in
     run)            shift; cmd_run "$@" ;;
     create-ticket)  shift; cmd_create_ticket "$@" ;;
     list-templates) shift; cmd_list_templates "$@" ;;
+    status)         shift; cmd_status "$@" ;;
     init)           shift; cmd_init "$@" ;;
     help|--help|-h) cmd_help ;;
     version|--version|-v) echo "chat-force v${CHAT_FORCE_VERSION}" ;;
