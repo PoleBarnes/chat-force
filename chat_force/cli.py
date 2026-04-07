@@ -465,8 +465,9 @@ def cmd_run(args):
     # Checkout or create branch
     rc = run_cmd(["git", "rev-parse", "--verify", branch],
                  capture_output=True).returncode
-    if rc == 0:
-        info(f"Checking out existing branch: {branch}")
+    resuming = rc == 0
+    if resuming:
+        info(f"Resuming on existing branch: {branch}")
         run_cmd(["git", "checkout", branch])
     else:
         info(f"Creating new branch: {branch}")
@@ -529,10 +530,14 @@ def _run_swarm(ticket_id, branch, extra_args):
 
     swarm_prompt = (
         f"You are executing ticket {ticket_id}. Read .ticket-context for the full "
-        f"ticket details including acceptance criteria. IMPORTANT: Before starting work, "
-        f"read the ticket's comment history in Linear (use list_comments for {ticket_id}) "
+        f"ticket details including acceptance criteria.\n\n"
+        f"BEFORE STARTING WORK:\n"
+        f"1. Check git log and the existing files on this branch. If previous work "
+        f"exists, DO NOT redo it. Pick up where the last session left off.\n"
+        f"2. Read the ticket's comment history (use list_comments for {ticket_id}) "
         f"to check for previous attempts. If prior attempts exist, read the PM Review "
-        f"comments to understand what failed and why — do NOT repeat the same mistakes. "
+        f"comments to understand what failed and why — do NOT repeat the same mistakes.\n"
+        f"3. Run 'git diff main' or 'ls output/' to see what's already been produced.\n\n"
         f"Work to satisfy all acceptance criteria. When done, ensure all artifacts are "
         f"saved and committed."
     )
