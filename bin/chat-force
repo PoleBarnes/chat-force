@@ -110,9 +110,11 @@ cmd_mechanic() {
 # ---------------------------------------------------------------------------
 cmd_init() {
     local template="general"
+    local tracker="linear"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --template) template="$2"; shift 2 ;;
+            --tracker) tracker="$2"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -120,11 +122,25 @@ cmd_init() {
     local tpl="$TEMPLATES_DIR/$template"
     [[ -d "$tpl" ]] || { error "Template '$template' not found."; exit 1; }
 
-    info "Initializing project (template: $template)..."
+    # Validate tracker choice
+    case "$tracker" in
+        linear|jira) ;;
+        *) error "Unknown tracker: $tracker (use 'linear' or 'jira')"; exit 1 ;;
+    esac
+
+    info "Initializing project (template: $template, tracker: $tracker)..."
 
     [[ ! -f "CLAUDE.md" ]] && cp "$tpl/CLAUDE.md" ./CLAUDE.md && ok "  Created CLAUDE.md"
-    [[ -f "$tpl/.mcp.json" ]] && [[ ! -f ".mcp.json" ]] && \
-        cp "$tpl/.mcp.json" ./.mcp.json && ok "  Created .mcp.json (MCP server config)"
+
+    # Copy the right MCP config based on tracker choice
+    if [[ ! -f ".mcp.json" ]]; then
+        if [[ "$tracker" == "jira" ]] && [[ -f "$tpl/.mcp.jira.json" ]]; then
+            cp "$tpl/.mcp.jira.json" ./.mcp.json
+        elif [[ -f "$tpl/.mcp.json" ]]; then
+            cp "$tpl/.mcp.json" ./.mcp.json
+        fi
+        [[ -f ".mcp.json" ]] && ok "  Created .mcp.json ($tracker MCP config)"
+    fi
 
     mkdir -p .claude/rules .claude/skills .claude/agents
     [[ -f "$tpl/.claude/settings.json" ]] && [[ ! -f ".claude/settings.json" ]] && \
@@ -153,6 +169,14 @@ cmd_init() {
             [[ -f "$tpl/vault/$vf" ]] && cp "$tpl/vault/$vf" "vault/$vf"
         done
         ok "  Created vault/"
+    fi
+
+    # Write project config
+    if [[ ! -f ".claude/chat-force.yaml" ]]; then
+        cat > ".claude/chat-force.yaml" <<CFEOF
+tracker: $tracker
+CFEOF
+        ok "  Created .claude/chat-force.yaml (tracker: $tracker)"
     fi
 
     mkdir -p .mechanic/log
@@ -481,9 +505,21 @@ cmd_status() {
         attempts=$(git log --oneline --grep="WIP: ${ticket_id}" 2>/dev/null | wc -l | tr -d ' ')
     fi
 
+    # Read tracker from project config
+    local tracker="(unknown)"
+    if [[ -f ".claude/chat-force.yaml" ]]; then
+        tracker=$(python3 -c "
+import yaml, sys
+with open('.claude/chat-force.yaml') as f:
+    cfg = yaml.safe_load(f)
+print(cfg.get('tracker', '(unknown)'))
+")
+    fi
+
     echo ""
     info "Project Status"
     echo "  Branch:     $branch"
+    echo "  Tracker:    $tracker"
 
     if [[ -n "$ticket_id" ]]; then
         echo "  Ticket:     $ticket_id"
@@ -516,7 +552,8 @@ Usage:
   chat-force create-ticket --template T Create ticket (--field or --interactive)
   chat-force list-templates             List available ticket templates
   chat-force status                     Show current ticket, branch, attempts
-  chat-force init [--template T]        Scaffold a new project
+  chat-force init [--template T] [--tracker linear|jira]
+                                        Scaffold a new project
   chat-force help                       This help
 
 Project structure:
