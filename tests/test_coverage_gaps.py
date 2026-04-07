@@ -187,6 +187,63 @@ class TestInitIdempotency:
 # ---------------------------------------------------------------------------
 # cmd_init: error paths
 # ---------------------------------------------------------------------------
+class TestInitWithProjectName:
+    def test_init_creates_directory(self):
+        tmpdir = tempfile.mkdtemp(prefix="chatforce-gaps-")
+        try:
+            result = run_chat_force("init", "my-new-project", cwd=tmpdir)
+            assert result.returncode == 0
+            project_dir = os.path.join(tmpdir, "my-new-project")
+            assert os.path.isdir(project_dir)
+            assert os.path.isfile(os.path.join(project_dir, "CLAUDE.md"))
+            assert os.path.isdir(os.path.join(project_dir, ".git"))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_init_into_existing_git_repo(self):
+        tmpdir = tempfile.mkdtemp(prefix="chatforce-gaps-")
+        try:
+            # Create an existing git repo with a file
+            existing = os.path.join(tmpdir, "existing-project")
+            os.makedirs(existing)
+            subprocess.run(["git", "init"], cwd=existing, capture_output=True, check=True)
+            with open(os.path.join(existing, "README.md"), "w") as f:
+                f.write("# Existing project")
+
+            result = run_chat_force("init", "existing-project", cwd=tmpdir)
+            assert result.returncode == 0
+            # Should have CLAUDE.md alongside existing README
+            assert os.path.isfile(os.path.join(existing, "CLAUDE.md"))
+            assert os.path.isfile(os.path.join(existing, "README.md"))
+            # Should not re-init git
+            assert "initialized" not in result.stdout.lower() or "using existing" in result.stdout.lower()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_init_into_existing_dir_no_git(self):
+        tmpdir = tempfile.mkdtemp(prefix="chatforce-gaps-")
+        try:
+            existing = os.path.join(tmpdir, "no-git-dir")
+            os.makedirs(existing)
+
+            result = run_chat_force("init", "no-git-dir", cwd=tmpdir)
+            assert result.returncode == 0
+            # Should have initialized git
+            assert os.path.isdir(os.path.join(existing, ".git"))
+            assert os.path.isfile(os.path.join(existing, "CLAUDE.md"))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_init_no_name_works_in_cwd(self):
+        tmpdir = tempfile.mkdtemp(prefix="chatforce-gaps-")
+        try:
+            result = run_chat_force("init", cwd=tmpdir)
+            assert result.returncode == 0
+            assert os.path.isfile(os.path.join(tmpdir, "CLAUDE.md"))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 class TestInitErrors:
     def test_invalid_template(self):
         tmpdir = tempfile.mkdtemp(prefix="chatforce-gaps-")

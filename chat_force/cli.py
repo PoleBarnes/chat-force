@@ -164,6 +164,7 @@ def cmd_mechanic(args):
 def cmd_init(args):
     template = "general"
     tracker = "linear"
+    project_name = ""
     i = 0
     while i < len(args):
         if args[i] == "--template" and i + 1 < len(args):
@@ -172,6 +173,9 @@ def cmd_init(args):
         elif args[i] == "--tracker" and i + 1 < len(args):
             tracker = args[i + 1]
             i += 2
+        elif not args[i].startswith("-") and not project_name:
+            project_name = args[i]
+            i += 1
         else:
             i += 1
 
@@ -183,6 +187,22 @@ def cmd_init(args):
     if tracker not in ("linear", "jira"):
         error(f"Unknown tracker: {tracker} (use 'linear' or 'jira')")
         sys.exit(1)
+
+    # If project name given, create/enter the directory
+    if project_name:
+        project_dir = Path(project_name)
+        if project_dir.exists():
+            os.chdir(project_dir)
+            info(f"Using existing directory: {project_name}")
+        else:
+            project_dir.mkdir(parents=True)
+            os.chdir(project_dir)
+            ok(f"Created directory: {project_name}")
+
+        # Init git if not already a repo
+        if not Path(".git").exists():
+            run_cmd(["git", "init"], capture_output=True)
+            ok("  Initialized git repository")
 
     info(f"Initializing project (template: {template}, tracker: {tracker})...")
 
@@ -580,8 +600,8 @@ Usage:
   chat-force create-ticket --template T Create ticket (--field or --interactive)
   chat-force list-templates             List available ticket templates
   chat-force status                     Show current ticket, branch, attempts
-  chat-force init [--template T] [--tracker linear|jira]
-                                        Scaffold a new project
+  chat-force init [name] [--template T] [--tracker linear|jira]
+                                        Scaffold a new project (creates dir if name given)
   chat-force help                       This help
 
 Project structure:
