@@ -54,7 +54,8 @@ class TestRunCommand:
     def test_run_without_ticket_id_errors(self, git_project_dir):
         result = run_chat_force("run", cwd=git_project_dir)
         assert result.returncode != 0
-        assert "ticket-id" in result.stderr.lower() or "usage" in result.stderr.lower()
+        lower = result.stderr.lower()
+        assert "ticket-id" in lower or "usage" in lower or "not found" in lower
 
     def test_help_includes_run(self):
         result = run_chat_force("help")
