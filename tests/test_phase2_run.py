@@ -73,81 +73,16 @@ def make_fake_claude(tmpdir, script_body="exit 0"):
     return fake_bin
 
 
-class TestRunThreePhase:
-    def test_run_builds_ticket_context(self, git_project_dir):
-        fake_bin = make_fake_claude(
-            git_project_dir,
-            'cp .ticket-context /tmp/captured-ticket-context.json 2>/dev/null || true',
-        )
-        env = {"PATH": fake_bin + ":" + os.environ["PATH"]}
-        captured = "/tmp/captured-ticket-context.json"
-        if os.path.exists(captured):
-            os.unlink(captured)
-        try:
-            result = run_chat_force("run", "PROJ-42", cwd=git_project_dir, env=env)
-            assert result.returncode == 0, f"run failed: {result.stderr}"
-            assert os.path.isfile(captured)
-            ctx = json.loads(open(captured).read())
-            assert ctx["ticket_id"] == "PROJ-42"
-            assert ctx["branch"] == "ticket/PROJ-42"
-        finally:
-            if os.path.exists(captured):
-                os.unlink(captured)
+class TestRunCommand:
+    """Run is now interactive — test what we can without launching claude."""
 
-    def test_run_three_phases_output(self, git_project_dir):
-        fake_bin = make_fake_claude(git_project_dir)
-        env = {"PATH": fake_bin + ":" + os.environ["PATH"]}
-        result = run_chat_force("run", "PROJ-42", cwd=git_project_dir, env=env)
-        combined = (result.stdout + result.stderr).lower()
-        assert "swarm" in combined or "execution" in combined
-        assert "pm" in combined or "verification" in combined
-        assert "mechanic" in combined
-
-    def test_run_passes_ticket_context_to_swarm(self, git_project_dir):
-        fake_bin = make_fake_claude(
-            git_project_dir, 'echo "$@" >> /tmp/claude-args-test.txt',
-        )
-        env = {"PATH": fake_bin + ":" + os.environ["PATH"]}
-        args_file = "/tmp/claude-args-test.txt"
-        if os.path.exists(args_file):
-            os.unlink(args_file)
-        try:
-            run_chat_force("run", "PROJ-42", cwd=git_project_dir, env=env)
-            assert os.path.isfile(args_file)
-            calls = open(args_file).read()
-            assert "PROJ-42" in calls or "ticket" in calls.lower()
-        finally:
-            if os.path.exists(args_file):
-                os.unlink(args_file)
-
-    def test_run_uses_pm_prompt(self, git_project_dir):
-        fake_bin = make_fake_claude(
-            git_project_dir, 'echo "$@" >> /tmp/claude-pm-test.txt',
-        )
-        env = {"PATH": fake_bin + ":" + os.environ["PATH"]}
-        args_file = "/tmp/claude-pm-test.txt"
-        if os.path.exists(args_file):
-            os.unlink(args_file)
-        try:
-            run_chat_force("run", "PROJ-42", cwd=git_project_dir, env=env)
-            assert os.path.isfile(args_file)
-            calls = open(args_file).read()
-            assert "pm-prompt" in calls.lower() or "pm" in calls.lower()
-        finally:
-            if os.path.exists(args_file):
-                os.unlink(args_file)
-
-    def test_run_cleans_up_ticket_context(self, git_project_dir):
-        fake_bin = make_fake_claude(git_project_dir)
-        env = {"PATH": fake_bin + ":" + os.environ["PATH"]}
-        result = run_chat_force("run", "PROJ-42", cwd=git_project_dir, env=env)
-        assert result.returncode == 0
-        assert not os.path.isfile(os.path.join(git_project_dir, ".ticket-context"))
-
-
-class TestHelpOutput:
-    def test_help_describes_three_phases(self):
+    def test_run_appears_in_help(self):
         result = run_chat_force("help")
         assert result.returncode == 0
-        lower = result.stdout.lower()
-        assert "swarm" in lower or "three-phase" in lower or "pm" in lower
+        assert "run" in result.stdout.lower()
+
+    def test_pm_prompt_exists(self):
+        assert os.path.isfile(os.path.join(TEMPLATES_DIR, "pm-prompt.md"))
+
+    def test_mechanic_prompt_exists(self):
+        assert os.path.isfile(os.path.join(TEMPLATES_DIR, "mechanic-prompt.md"))

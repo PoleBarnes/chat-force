@@ -420,97 +420,71 @@ def cmd_run(args):
     require_claude()
     require_project()
 
-    ticket_id = ""
-    description = ""
-    branch_override = ""
-    extra_args = []
-    i = 0
-    while i < len(args):
-        if args[i] == "-p" and i + 1 < len(args):
-            description = args[i + 1]
-            i += 2
-        elif args[i] == "--branch" and i + 1 < len(args):
-            branch_override = args[i + 1]
-            i += 2
-        elif args[i].startswith("-"):
-            extra_args.append(args[i])
-            i += 1
-        elif not ticket_id and not description:
-            ticket_id = args[i]
-            i += 1
-        else:
-            extra_args.append(args[i])
-            i += 1
+    extra_args = [a for a in args if a.startswith("-")]
 
-    # Determine mode: ticket vs local
-    if description:
-        # Local mode: -p "description"
-        slug = re.sub(r'[^a-z0-9]+', '-', description.lower())[:40].strip('-')
-        ticket_id = f"local-{slug}"
-        branch = branch_override or f"run/{slug}"
-    elif ticket_id:
-        # Ticket mode: run PROJ-42
-        require_tracker()
-        branch = branch_override or f"ticket/{ticket_id}"
-    else:
-        error("Usage: chat-force run <ticket-id>  OR  chat-force run -p \"description\"")
-        sys.exit(1)
+    # Build the system prompt that teaches Claude how to operate
+    system_prompt = (
+        "You are a chat-force agent. This session runs three phases automatically:\n\n"
+        "  Phase 1: BUILD — You do the work (this phase, interactive)\n"
+        "  Phase 2: REVIEW — A PM agent checks your output against acceptance criteria\n"
+        "  Phase 3: IMPROVE — A mechanic agent analyzes the session and improves the harness\n\n"
+        "You are in Phase 1 now.\n\n"
+        "START by greeting the user briefly, explaining the three phases in one sentence, "
+        "then ask:\n\n"
+        "  \"What are we working on? Give me a ticket ID (e.g. PROJ-42) or describe the task.\"\n\n"
+        "If they give a ticket ID:\n"
+        "- Pull the ticket from the tracker (Linear or Jira via MCP)\n"
+        "- Read the description and acceptance criteria\n"
+        "- Create branch ticket/<id> and begin work\n\n"
+        "If they describe a task:\n"
+        "- Confirm you understand, then start working\n\n"
+        "During work:\n"
+        "- Read CLAUDE.md for project context\n"
+        "- Read .claude/rules/ and .claude/skills/ for project rules and skills\n"
+        "- Check git log and existing files — if previous work exists, don't redo it\n"
+        "- Read vault/ for project knowledge\n"
+        "- Follow the session-close checklist in CLAUDE.md before finishing\n"
+        "- When done, commit your work and tell the user Phase 1 is complete\n"
+    )
 
-    # Checkout or create branch
-    rc = run_cmd(["git", "rev-parse", "--verify", branch],
-                 capture_output=True).returncode
-    resuming = rc == 0
-    if resuming:
-        info(f"Resuming on existing branch: {branch}")
-        run_cmd(["git", "checkout", branch])
-    else:
-        info(f"Creating new branch: {branch}")
-        run_cmd(["git", "checkout", "-b", branch])
+    prompt_file = Path(".chat-force-swarm-prompt.md")
+    prompt_file.write_text(system_prompt)
 
-    # Write and commit ticket context before swarm starts
-    if description:
-        # Local mode: write description as the context
-        ctx = {
-            "ticket_id": ticket_id,
-            "branch": branch,
-            "attempt": 1,
-            "description": description,
-            "acceptance_criteria": [
-                "Deliverable directly addresses the stated goal",
-                "No hallucinated facts, URLs, or statistics",
-                "If external content was ingested, vault is updated",
-            ],
-        }
-        result = run_cmd(
-            ["git", "log", "--oneline", f"--grep=WIP: {ticket_id}"],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            ctx["attempt"] = len(result.stdout.strip().splitlines()) + 1
-        Path(".ticket-context").write_text(json.dumps(ctx, indent=2) + "\n")
-    else:
-        # Ticket mode: write context from template
-        _write_ticket_context(ticket_id, branch)
+    session_id = gen_session_id()
+    info("=== chat-force run ===")
+    info(f"Session: {session_id}")
+    print()
 
-    run_cmd(["git", "add", ".ticket-context"])
-    run_cmd(["git", "commit", "-m", f"ticket-context: {ticket_id} attempt setup"],
-            capture_output=True)
+    # Launch claude interactively with full UI
+    rc = run_cmd(
+        ["claude", "--session-id", session_id,
+         "--system-prompt", str(prompt_file)]
+        + extra_args
+    ).returncode
 
-    # Phase 1: Swarm
-    _run_swarm(ticket_id, branch, extra_args)
+    if prompt_file.exists():
+        prompt_file.unlink()
+
+    print()
+    if rc not in (0, 130):
+        warn(f"Swarm exited with code {rc}")
+
+    # Commit any uncommitted work
+    result = run_cmd(["git", "status", "--porcelain"], capture_output=True, text=True)
+    if result.stdout.strip():
+        run_cmd(["git", "add", "-A"])
+        run_cmd(["git", "commit", "-m", "WIP: chat-force session"])
+        commit = run_cmd(["git", "rev-parse", "--short", "HEAD"],
+                         capture_output=True, text=True).stdout.strip()
+        ok(f"Swarm committed: {commit}")
 
     # Phase 2: PM Verification
-    _run_pm_verification(ticket_id, branch)
+    _run_pm_verification("session", "current")
 
     # Phase 3: Mechanic Reflection
-    _run_mechanic_reflection(ticket_id, branch)
+    _run_mechanic_reflection("session", "current")
 
-    # Cleanup
-    ctx_path = Path(".ticket-context")
-    if ctx_path.exists():
-        ctx_path.unlink()
-
-    info(f"All phases complete for {ticket_id} on branch {branch}")
+    ok("All phases complete.")
 
 
 def _write_ticket_context(ticket_id, branch):
@@ -559,12 +533,28 @@ def _run_swarm(ticket_id, branch, extra_args):
         f"saved and committed."
     )
 
-    # -p auto-starts the session with the prompt and streams output to terminal.
-    # User sees everything Claude does in real time.
+    # Write swarm instructions as system prompt. Launch claude interactively
+    # so the user gets the full UI (spinner, tool calls, streaming output).
+    # The system prompt tells Claude what to do; the user just types "go" or
+    # their own instructions to start.
+    prompt_file = Path(".chat-force-swarm-prompt.md")
+    prompt_file.write_text(swarm_prompt)
+
+    ctx_data = json.loads(Path(".ticket-context").read_text())
+    desc = ctx_data.get("description", "")
+    if desc:
+        info(f"Task: {desc}")
+    info("Type 'go' to start, or give additional instructions.")
+    print()
+
     rc = run_cmd(
-        ["claude", "--session-id", session_id, "-p", swarm_prompt]
+        ["claude", "--session-id", session_id,
+         "--system-prompt", str(prompt_file)]
         + extra_args
     ).returncode
+
+    if prompt_file.exists():
+        prompt_file.unlink()
     print()
     if rc not in (0, 130):
         warn(f"Swarm exited with code {rc}")
@@ -696,8 +686,7 @@ def cmd_help():
     print(f"""chat-force v{VERSION} — self-improving prototyping tool
 
 Usage:
-  chat-force run <ticket-id>             Execute ticket (swarm → PM → mechanic)
-  chat-force run -p "description"       Local run (swarm → PM → mechanic, no tracker)
+  chat-force run                          Launch swarm → PM → mechanic
   chat-force mechanic [args]            Manual mechanic review of current project
   chat-force create-ticket --template T Create ticket (--field or --interactive)
   chat-force list-templates             List available ticket templates
