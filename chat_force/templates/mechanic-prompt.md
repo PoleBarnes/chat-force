@@ -61,6 +61,14 @@ Evaluate the session on two axes:
 - Are there stale pages that newer sources supersede?
 - Run a vault lint pass if the session touched external content.
 
+**Tooling gaps:**
+- Did the session get stuck or fail because a tool was missing or inadequate?
+- Did the agent try an operation repeatedly that kept failing? (e.g., web scraping blocked, API not available, file format not supported)
+- Did the agent spend many turns working around a missing capability?
+- Was there an MCP server or CLI tool that could have solved the problem?
+- Check `.mcp.json` — are there tools the agent needed but didn't have?
+- **Research solutions.** If you identify a tooling gap, search for MCP servers or tools that solve it. Propose adding them to `.mcp.json`.
+
 ### Step 3 — Delegate Review Checks
 
 Create sub-agents for focused analysis as needed. Examples:
@@ -84,7 +92,24 @@ Generate proposals. Each proposal is one of these types:
 | `prompt_update` | `CLAUDE.md` | Strengthened instructions or identity |
 | `eval` | `.claude/rules/eval-criteria.md` | New or updated evaluation criterion |
 | `vault` | `vault/...` | Knowledge base update |
-| `ticket_template` | `.claude/ticket-templates/<name>.yaml` | A new or improved ticket template |
+| `ticket_template` | `.claude/ticket-templates/<name>.json` | A new or improved ticket template |
+| `mcp_server` | `.mcp.json` | Add an MCP server to give the agent new capabilities |
+
+#### MCP Server Proposals
+
+When you identify a tooling gap — the agent needed a capability it didn't have — research available MCP servers that solve the problem. Common examples:
+
+- **Web scraping blocked?** → Propose `firecrawl-mcp` or `@anthropic-ai/browser-mcp-server`
+- **Need to read PDFs?** → Propose a PDF reader MCP
+- **Need database access?** → Propose the relevant database MCP
+- **Need to generate images?** → Propose an image generation MCP
+
+For each `mcp_server` proposal, provide:
+1. The server name and install command (npx/uvx)
+2. What capability it adds
+3. What session failure it would have prevented
+4. The exact JSON to merge into `.mcp.json`
+5. Any API keys or credentials the user will need to provide
 
 #### Template Evolution
 
@@ -133,7 +158,7 @@ Each entry includes:
 
 ```yaml
 proposal:
-  type: skill | rule | agent | prompt_update | eval | vault
+  type: skill | rule | agent | prompt_update | eval | vault | ticket_template | mcp_server
   target: <file path>
   evidence: <what in the session prompted this>
   status: approved | rejected
