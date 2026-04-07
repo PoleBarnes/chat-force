@@ -11,7 +11,7 @@ import sys
 import uuid
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 MECHANIC_PROMPT = TEMPLATES_DIR / "mechanic-prompt.md"
 PM_PROMPT = TEMPLATES_DIR / "pm-prompt.md"
