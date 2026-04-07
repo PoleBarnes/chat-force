@@ -16,4 +16,10 @@ chat-force = "chat_force.cli:main"
 include = ["chat_force*"]
 
 [tool.setuptools.package-data]
-chat_force = ["templates/**/*"]
+chat_force = [
+    "templates/**/*",
+    "templates/**/.*",
+    "templates/general/.claude/**/*",
+    "templates/general/.claude/**/*.json",
+    "templates/general/.claude/**/*.md",
+]
