@@ -37,5 +37,9 @@ output/
 
 # Claude Code local state (in the engine repo root only)
 /.claude/
+
+# Transient session files
+.chat-force-swarm-prompt.md
+.ticket-context
 # But allow .claude/ inside templates (they're tracked content)
 !templates/**/.claude/

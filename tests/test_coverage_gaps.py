@@ -195,16 +195,21 @@ class TestInitErrors:
 # main: routing
 # ---------------------------------------------------------------------------
 class TestMainRouting:
-    def test_unknown_command_errors(self):
+    def test_unknown_command_falls_through_to_run(self):
+        """Unknown first arg is treated as default behavior (init+run), not an error.
+        Without claude CLI, it should error about claude not found — not 'unknown command'."""
         result = run_chat_force("foobar")
-        assert result.returncode != 0
-        assert "unknown command" in result.stderr.lower()
+        # Either exits non-zero (no claude) or tries to run — never "unknown command"
+        assert "unknown command" not in result.stderr.lower()
 
-    def test_no_args_shows_help(self):
+    def test_no_args_tries_to_run(self):
+        """No args now launches the three-phase session (not help).
+        Without claude CLI it errors; with claude CLI it opens interactively."""
         result = run_chat_force()
-        assert result.returncode == 0
-        assert "chat-force v" in result.stdout
-        assert "Usage:" in result.stdout
+        # Should NOT show help text — the default is now 'run'
+        # It will either error (no claude / no CLAUDE.md) or launch
+        # We just verify it doesn't print help
+        assert "Usage:" not in result.stdout
 
     def test_version_flag(self):
         result = run_chat_force("--version")
@@ -215,6 +220,13 @@ class TestMainRouting:
         result = run_chat_force("-h")
         assert result.returncode == 0
         assert "Usage:" in result.stdout
+
+    def test_help_command_shows_usage(self):
+        """Explicit 'help' still works."""
+        result = run_chat_force("help")
+        assert result.returncode == 0
+        assert "Usage:" in result.stdout
+        assert "chat-force" in result.stdout
 
 
 # ---------------------------------------------------------------------------

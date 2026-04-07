@@ -97,12 +97,6 @@ def read_tracker():
 # Commands
 # ---------------------------------------------------------------------------
 
-def cmd_prototype(args):
-    """Deprecated — redirects to cmd_run."""
-    warn("'prototype' is deprecated. Use 'chat-force run -p \"description\"' instead.")
-    cmd_run(["-p"] + args)
-
-
 def cmd_mechanic(args):
     require_claude()
     require_project()
@@ -449,6 +443,11 @@ def cmd_run(args):
 
     prompt_file = Path(".chat-force-swarm-prompt.md")
     prompt_file.write_text(system_prompt)
+
+    # Write minimal ticket context so Phase 2/3 have something to verify against
+    if not Path(".ticket-context").exists():
+        ctx = {"ticket_id": "session", "branch": "current", "attempt": 1}
+        Path(".ticket-context").write_text(json.dumps(ctx, indent=2) + "\n")
 
     session_id = gen_session_id()
     info("=== chat-force run ===")
