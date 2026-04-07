@@ -4,6 +4,7 @@
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -93,31 +94,90 @@ def read_tracker():
 # ---------------------------------------------------------------------------
 
 def cmd_prototype(args):
+    """Local run: same three-phase flow as 'run', but no tracker integration.
+    Takes a description string which becomes the local ticket context."""
     require_claude()
     require_project()
 
-    session_id = gen_session_id()
-    info(f"Starting prototyping session: {session_id}")
-    info("Type /exit or Ctrl+C when done.")
-    print()
+    # Parse args: everything that's not a flag is the description
+    description_parts = []
+    extra_args = []
+    i = 0
+    while i < len(args):
+        if args[i].startswith("-"):
+            extra_args.append(args[i])
+            i += 1
+        else:
+            description_parts.append(args[i])
+            i += 1
 
-    rc = run_cmd(["claude", "--session-id", session_id] + args).returncode
-    print()
-    if rc not in (0, 130):
-        warn(f"Session exited with code {rc}")
+    description = " ".join(description_parts)
+    if not description:
+        try:
+            description = input(f"{BLUE}[chat-force]{NC} What do you want to build? ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(1)
+        if not description:
+            error("Description required.")
+            sys.exit(1)
 
-    info(f"Prototype session complete: {session_id}")
-    try:
-        response = input(f"{BLUE}[chat-force]{NC} Launch mechanic review? [Y/n] ").strip()
-    except (EOFError, KeyboardInterrupt):
-        response = "n"
-        print()
+    # Generate a slug for the branch name
+    slug = re.sub(r'[^a-z0-9]+', '-', description.lower())[:40].strip('-')
+    ticket_id = f"local-{slug}"
+    branch = f"prototype/{slug}"
 
-    if response in ("", "Y", "y"):
-        print()
-        cmd_mechanic([session_id])
+    # Checkout or create branch
+    rc = run_cmd(["git", "rev-parse", "--verify", branch],
+                 capture_output=True).returncode
+    resuming = rc == 0
+    if resuming:
+        info(f"Resuming on existing branch: {branch}")
+        run_cmd(["git", "checkout", branch])
     else:
-        info("Skipping mechanic. Run 'chat-force mechanic' later.")
+        info(f"Creating new branch: {branch}")
+        run_cmd(["git", "checkout", "-b", branch])
+
+    # Write ticket context with the description as acceptance criteria
+    ctx = {
+        "ticket_id": ticket_id,
+        "branch": branch,
+        "attempt": 1,
+        "description": description,
+        "acceptance_criteria": [
+            "Deliverable directly addresses the stated goal",
+            "No hallucinated facts, URLs, or statistics",
+            "If external content was ingested, vault is updated",
+        ],
+    }
+    # Count previous attempts
+    result = run_cmd(
+        ["git", "log", "--oneline", f"--grep=WIP: {ticket_id}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        ctx["attempt"] = len(result.stdout.strip().splitlines()) + 1
+
+    Path(".ticket-context").write_text(json.dumps(ctx, indent=2) + "\n")
+    run_cmd(["git", "add", ".ticket-context"])
+    run_cmd(["git", "commit", "-m", f"ticket-context: {ticket_id} attempt setup"],
+            capture_output=True)
+
+    # Phase 1: Swarm
+    _run_swarm(ticket_id, branch, extra_args)
+
+    # Phase 2: PM Verification
+    _run_pm_verification(ticket_id, branch)
+
+    # Phase 3: Mechanic Reflection
+    _run_mechanic_reflection(ticket_id, branch)
+
+    # Cleanup
+    ctx_path = Path(".ticket-context")
+    if ctx_path.exists():
+        ctx_path.unlink()
+
+    info(f"All phases complete for {ticket_id} on branch {branch}")
 
 
 def cmd_mechanic(args):
@@ -602,7 +662,16 @@ def _run_mechanic_reflection(ticket_id, branch):
     mechanic_instruction = (
         f"Analyze the execution of ticket {ticket_id} on branch {branch}. "
         f"Read .ticket-context for the ticket details. Review git diff and "
-        f"session artifacts, then propose harness improvements."
+        f"session artifacts, then propose harness improvements.\n\n"
+        f"IMPORTANT: You are running in AUTO-COMMIT mode (non-interactive). "
+        f"Do NOT wait for approval. Instead:\n"
+        f"1. Analyze the session and identify improvements\n"
+        f"2. Write ALL proposals to .mechanic/log/ as documented in your prompt\n"
+        f"3. For each proposal, write the actual file (skill, rule, etc.) directly\n"
+        f"4. Stage and commit everything with message: mechanic: <summary>\n"
+        f"5. Do NOT skip the .mechanic/log/ entry — that's the audit trail\n"
+        f"6. Check .mcp.json for tooling gaps — if the session struggled with a "
+        f"missing capability, research and trial MCP servers as documented in your prompt"
     )
 
     rc = run_cmd(
@@ -667,9 +736,9 @@ def cmd_help():
     print(f"""chat-force v{VERSION} — self-improving prototyping tool
 
 Usage:
-  chat-force prototype [args]           Prototype session → mechanic handoff
-  chat-force mechanic [args]            Mechanic review of current project
+  chat-force prototype "description"     Local run: swarm → PM → mechanic (no tracker)
   chat-force run <ticket-id> [--branch] Execute ticket (swarm → PM → mechanic)
+  chat-force mechanic [args]            Manual mechanic review of current project
   chat-force create-ticket --template T Create ticket (--field or --interactive)
   chat-force list-templates             List available ticket templates
   chat-force status                     Show current ticket, branch, attempts
