@@ -7,7 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  test-cli:
+    name: Chat-Force CLI Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,7 +16,23 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Run tests
+      - name: Run CLI tests
+        run: |
+          uv run --python 3.13 --with pytest \
+            pytest tests/test_ticket_templates.py tests/test_branch_management.py \
+                   tests/test_phase2_run.py tests/test_phase3_templates.py \
+                   tests/test_status_command.py tests/test_tracker_selection.py -v
+
+  test-engine:
+    name: Engine Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Run engine tests
         run: |
           uv run --python 3.13 \
             --with docker,pytest,"slack_sdk>=3.41.0","slack_bolt>=1.27.0" \
@@ -34,7 +51,7 @@ jobs:
           uv run --python 3.13 python -c "
           import py_compile, sys, glob
           errors = []
-          for f in glob.glob('pipeline/**/*.py', recursive=True) + glob.glob('worker/**/*.py', recursive=True):
+          for f in glob.glob('pipeline/**/*.py', recursive=True) + glob.glob('worker/**/*.py', recursive=True) + glob.glob('chat_force/**/*.py', recursive=True):
               try:
                   py_compile.compile(f, doraise=True)
               except py_compile.PyCompileError as e:
@@ -46,7 +63,7 @@ jobs:
           "
 
   build-worker:
-    needs: [test, lint]
+    needs: [test-cli, test-engine, lint]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
