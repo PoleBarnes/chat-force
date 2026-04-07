@@ -89,7 +89,11 @@ def require_tracker():
 def read_tracker():
     cfg_path = Path(".claude/chat-force.json")
     if cfg_path.exists():
-        return json.loads(cfg_path.read_text()).get("tracker", "(unknown)")
+        try:
+            return json.loads(cfg_path.read_text()).get("tracker", "(unknown)")
+        except (json.JSONDecodeError, ValueError):
+            warn(f"Corrupt config: {cfg_path} — delete and re-run 'chat-force init'")
+            return "(unknown)"
     return "(unknown)"
 
 
@@ -216,39 +220,50 @@ def cmd_init(args):
 
         if Path(".mcp.json").exists():
             # Prompt for API credentials
-            mcp_data = json.loads(Path(".mcp.json").read_text())
+            try:
+                mcp_data = json.loads(Path(".mcp.json").read_text())
+            except (json.JSONDecodeError, ValueError):
+                warn("Corrupt .mcp.json — skipping MCP credential setup")
+                mcp_data = None
+
             updated = False
+            if mcp_data is not None:
+                if tracker == "linear":
+                    print()
+                    info("Linear API key required for MCP integration.")
+                    info("Get yours at: Linear → Settings → API → Personal API keys")
+                    api_key = _prompt_input("LINEAR_API_KEY (enter to skip)")
+                    if api_key:
+                        try:
+                            mcp_data["mcpServers"]["linear"]["env"]["LINEAR_API_KEY"] = api_key
+                            updated = True
+                        except (KeyError, TypeError):
+                            warn("  .mcp.json missing expected Linear config — edit manually")
+                    else:
+                        warn("  Skipped — edit .mcp.json to add your LINEAR_API_KEY later")
 
-            if tracker == "linear":
-                print()
-                info("Linear API key required for MCP integration.")
-                info("Get yours at: Linear → Settings → API → Personal API keys")
-                api_key = _prompt_input("LINEAR_API_KEY (enter to skip)")
-                if api_key:
-                    mcp_data["mcpServers"]["linear"]["env"]["LINEAR_API_KEY"] = api_key
-                    updated = True
-                else:
-                    warn("  Skipped — edit .mcp.json to add your LINEAR_API_KEY later")
+                elif tracker == "jira":
+                    print()
+                    info("Jira credentials required for MCP integration.")
+                    info("Get an API token at: https://id.atlassian.com/manage-profile/security/api-tokens")
+                    jira_url = _prompt_input("Jira instance URL (enter to skip)")
+                    if jira_url:
+                        jira_email = _prompt_input("Jira email")
+                        jira_token = _prompt_input("Jira API token")
+                        if jira_email and jira_token:
+                            try:
+                                env = mcp_data["mcpServers"]["atlassian"]["env"]
+                                env["JIRA_URL"] = jira_url
+                                env["JIRA_EMAIL"] = jira_email
+                                env["JIRA_API_TOKEN"] = jira_token
+                                updated = True
+                            except (KeyError, TypeError):
+                                warn("  .mcp.json missing expected Jira config — edit manually")
+                    if not updated:
+                        warn("  Skipped — edit .mcp.json to add your Jira credentials later")
 
-            elif tracker == "jira":
-                print()
-                info("Jira credentials required for MCP integration.")
-                info("Get an API token at: https://id.atlassian.com/manage-profile/security/api-tokens")
-                jira_url = _prompt_input("Jira instance URL (enter to skip)")
-                if jira_url:
-                    jira_email = _prompt_input("Jira email")
-                    jira_token = _prompt_input("Jira API token")
-                    if jira_email and jira_token:
-                        env = mcp_data["mcpServers"]["atlassian"]["env"]
-                        env["JIRA_URL"] = jira_url
-                        env["JIRA_EMAIL"] = jira_email
-                        env["JIRA_API_TOKEN"] = jira_token
-                        updated = True
-                if not updated:
-                    warn("  Skipped — edit .mcp.json to add your Jira credentials later")
-
-            if updated:
-                Path(".mcp.json").write_text(json.dumps(mcp_data, indent=2) + "\n")
+                if updated:
+                    Path(".mcp.json").write_text(json.dumps(mcp_data, indent=2) + "\n")
 
             ok(f"  Created .mcp.json ({tracker} MCP config)")
 
@@ -365,7 +380,11 @@ def cmd_create_ticket(args):
         rc = run_cmd(["claude", "--session-id", session_id, "-p", prompt]).returncode
         sys.exit(rc)
 
-    tpl_data = json.loads(tpl_file.read_text())
+    try:
+        tpl_data = json.loads(tpl_file.read_text())
+    except (json.JSONDecodeError, ValueError):
+        error(f"Corrupt template: {tpl_file}")
+        sys.exit(1)
 
     # Parse fields
     provided = {}
@@ -405,7 +424,11 @@ def cmd_list_templates(args):
     info("Available ticket templates:")
     print()
     for f in sorted(tpl_dir.glob("*.json")):
-        data = json.loads(f.read_text())
+        try:
+            data = json.loads(f.read_text())
+        except (json.JSONDecodeError, ValueError):
+            print(f"  {f.stem:<20s} (corrupt JSON — skipped)")
+            continue
         desc = data.get("description", "(no description)")
         print(f"  {f.stem:<20s} {desc}")
 
@@ -486,6 +509,9 @@ def cmd_run(args):
 
     if prompt_file.exists():
         prompt_file.unlink()
+
+    # Clear terminal artifacts left by Claude Code's TUI
+    print("\033[2J\033[H", end="", flush=True)
 
     if rc not in (0, 130):
         warn(f"Build phase exited with code {rc}")
